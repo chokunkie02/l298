@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Braille LED Controller - ควบคุมบอร์ด ESP32</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header & Navbar -->
+        <header class="app-header">
+            <div class="brand">
+                <i class="fa-solid fa-braille brand-icon"></i>
+                <div class="brand-text">
+                    <h1>Braille LED Controller</h1>
+                    <p class="subtitle">ระบบควบคุมแสดงผลอักษรเบรลล์ 6 จุด ผ่าน ESP32 & L298N</p>
+                </div>
+            </div>
+
+            <div class="connection-bar">
+                <div class="status-badge disconnected" id="statusBadge">
+                    <span class="status-dot"></span>
+                    <span id="statusText">ตรวจสอบการเชื่อมต่อ...</span>
+                </div>
+                
+                <div class="port-selector-group">
+                    <i class="fa-solid fa-plug"></i>
+                    <select id="portSelect" class="port-select" title="เลือก COM Port">
+                        <option value="COM3">COM3 (Default)</option>
+                    </select>
+                    <button id="reconnectBtn" class="btn btn-secondary btn-sm" title="เชื่อมต่อใหม่">
+                        <i class="fa-solid fa-rotate-right"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Layout Grid -->
+        <main class="main-grid">
+            
+            <!-- Left Column: Braille Visual Matrix Preview -->
+            <section class="card preview-card">
+                <div class="card-header">
+                    <h2><i class="fa-solid fa-eye"></i> Braille 6-Dot Matrix Preview</h2>
+                    <span class="badge-hint">คลิกที่จุดเพื่อเปิด/ปิด</span>
+                </div>
+
+                <div class="braille-matrix-container">
+                    <div class="braille-grid">
+                        <!-- Column 1 (Left Dots: 1, 2, 3) -->
+                        <div class="braille-column">
+                            <div class="dot-wrapper" data-dot="1">
+                                <div class="dot-circle" id="dot1">1</div>
+                                <span class="dot-label">Dot 1 (Top Left)</span>
+                            </div>
+                            <div class="dot-wrapper" data-dot="2">
+                                <div class="dot-circle" id="dot2">2</div>
+                                <span class="dot-label">Dot 2 (Mid Left)</span>
+                            </div>
+                            <div class="dot-wrapper" data-dot="3">
+                                <div class="dot-circle" id="dot3">3</div>
+                                <span class="dot-label">Dot 3 (Bot Left)</span>
+                            </div>
+                        </div>
+
+                        <!-- Column 2 (Right Dots: 4, 5, 6) -->
+                        <div class="braille-column">
+                            <div class="dot-wrapper" data-dot="4">
+                                <div class="dot-circle" id="dot4">4</div>
+                                <span class="dot-label">Dot 4 (Top Right)</span>
+                            </div>
+                            <div class="dot-wrapper" data-dot="5">
+                                <div class="dot-circle" id="dot5">5</div>
+                                <span class="dot-label">Dot 5 (Mid Right)</span>
+                            </div>
+                            <div class="dot-wrapper" data-dot="6">
+                                <div class="dot-circle" id="dot6">6</div>
+                                <span class="dot-label">Dot 6 (Bot Right)</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pattern-display-bar">
+                    <span class="label">Binary Pattern:</span>
+                    <span class="value" id="binaryPatternDisplay">000000</span>
+                </div>
+            </section>
+
+            <!-- Right Column: Controls & Presets -->
+            <section class="card control-card">
+                <div class="card-header">
+                    <h2><i class="fa-solid fa-sliders"></i> ควบคุมการส่งข้อมูล (Send Command)</h2>
+                </div>
+
+                <!-- 6-Digit Binary Input -->
+                <div class="form-group">
+                    <label for="patternInput">ป้อนเลข Binary 6 หลัก (เฉพาะ 0 และ 1):</label>
+                    <div class="input-with-button">
+                        <input type="text" id="patternInput" maxlength="6" placeholder="101010" value="000000" class="binary-input" autocomplete="off">
+                        <button id="sendBtn" class="btn btn-primary btn-lg">
+                            <i class="fa-solid fa-paper-plane"></i> Send to ESP32
+                        </button>
+                    </div>
+                    <p class="input-tip"><i class="fa-solid fa-circle-info"></i> ตัวอย่าง: <code>101010</code> ➔ เปิด Dot 1, 3, 5 | ดับ Dot 2, 4, 6</p>
+                </div>
+
+                <!-- Preset Action Buttons -->
+                <div class="preset-actions">
+                    <button id="btnAllOn" class="btn btn-success">
+                        <i class="fa-solid fa-lightbulb"></i> All ON (111111)
+                    </button>
+                    <button id="btnAllOff" class="btn btn-danger">
+                        <i class="fa-regular fa-lightbulb"></i> All OFF (000000)
+                    </button>
+                    <button id="btnClear" class="btn btn-secondary">
+                        <i class="fa-solid fa-eraser"></i> Clear (000000)
+                    </button>
+                </div>
+
+                <hr class="divider">
+
+                <!-- Thai Braille Keyboard Selector -->
+                <div class="keyboard-section">
+                    <h3><i class="fa-solid fa-language"></i> คีย์บอร์ดเลือกตัวอักษรไทย / ตัวเลข (Thai Braille Keyboard)</h3>
+                    <div class="alphabet-grid" id="alphabetGrid">
+                        <!-- Dynamically populated via JS -->
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Log & Terminal Section -->
+        <section class="card log-card">
+            <div class="card-header">
+                <h2><i class="fa-solid fa-terminal"></i> บันทึกการส่งข้อมูล (Serial Transmission Log)</h2>
+                <button id="clearLogBtn" class="btn btn-sm btn-outline"><i class="fa-solid fa-trash"></i> ล้าง Log</button>
+            </div>
+            <div class="terminal-box" id="terminalLog">
+                <div class="log-line info">[SYSTEM] เริ่มต้นระบบ Braille LED Controller... รอรับคำสั่ง</div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>Braille LED Control Center &copy; 2026 | เชื่อมต่อผ่าน Flask & PySerial ➔ ESP32 (COM3) @ 115200 Baud</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
