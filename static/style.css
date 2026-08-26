@@ -332,6 +332,10 @@ body {
     border-color: #34d399;
 }
 
+.ocr-status[data-state="warning"] {
+    border-color: #facc15;
+}
+
 .ocr-status[data-state="error"] {
     border-color: #fca5a5;
 }

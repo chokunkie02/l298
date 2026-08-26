@@ -1,9 +1,20 @@
 import os
 import sys
 import logging
+from io import BytesIO
+
 from flask import Flask, render_template, request, jsonify
 import serial
 import serial.tools.list_ports
+from werkzeug.exceptions import RequestEntityTooLarge
+
+from ocr_service import (
+    EasyOCRService,
+    OCRInitializationError,
+    OCRProcessingError,
+    OCR_LANGUAGES,
+    DEFAULT_LOW_CONFIDENCE_THRESHOLD,
+)
 
 # Force UTF-8 encoding for Windows console
 if sys.platform == 'win32':
@@ -20,6 +31,10 @@ TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+
+# Reader ภายในบริการนี้สร้างแบบ lazy เมื่อมี OCR request แรกเท่านั้น
+ocr_service = EasyOCRService()
 
 # Default Serial Settings
 DEFAULT_PORT = "COM3"
@@ -29,6 +44,70 @@ PORT_WEB = 5050
 # Global serial connection reference
 ser_conn = None
 active_port = DEFAULT_PORT
+
+SUPPORTED_IMAGE_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/bmp",
+    "image/tiff",
+    "image/webp",
+}
+
+
+def _has_supported_image_signature(image_bytes):
+    """ตรวจชนิดภาพจาก magic bytes โดยไม่บันทึกไฟล์ลงดิสก์"""
+    return any((
+        image_bytes.startswith(b"\xff\xd8\xff"),
+        image_bytes.startswith(b"\x89PNG\r\n\x1a\n"),
+        image_bytes.startswith((b"GIF87a", b"GIF89a")),
+        image_bytes.startswith(b"BM"),
+        image_bytes.startswith((b"II*\x00", b"MM\x00*")),
+        len(image_bytes) >= 12
+        and image_bytes.startswith(b"RIFF")
+        and image_bytes[8:12] == b"WEBP",
+    ))
+
+
+def _is_valid_image(image_bytes):
+    if not image_bytes or not _has_supported_image_signature(image_bytes):
+        return False
+
+    # Pillow เป็น dependency ของ EasyOCR ใช้ verify เมื่อพร้อมใช้งาน โดยไม่ decode
+    # หรือแก้ไขภาพ หาก dependency ยังไม่ได้ติดตั้งให้ magic bytes เป็นด่านตรวจขั้นต่ำ
+    try:
+        from PIL import Image, UnidentifiedImageError
+    except ImportError:
+        return True
+
+    try:
+        with Image.open(BytesIO(image_bytes)) as image:
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError):
+        return False
+    return True
+
+
+def _ocr_error(code, message, status_code):
+    return jsonify({
+        "ok": False,
+        "text": "",
+        "segments": [],
+        "mean_confidence": None,
+        "mean_confidence_note": (
+            "mean_confidence คือค่าเฉลี่ยเลขคณิตของ confidence ทุก segment "
+            "ไม่ใช่ค่ารับประกันความแม่นยำของ OCR"
+        ),
+        "low_confidence": False,
+        "low_confidence_threshold": DEFAULT_LOW_CONFIDENCE_THRESHOLD,
+        "languages": list(OCR_LANGUAGES),
+        "message": message,
+        "error": {
+            "code": code,
+            "message": message,
+        },
+    }), status_code
+
 
 def list_available_ports():
     """Returns a list of available COM ports on the system."""
@@ -85,6 +164,54 @@ THAI_BRAILLE_MAP = {
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_oversized_upload(_error):
+    return _ocr_error(
+        "image_too_large",
+        "ไฟล์ภาพมีขนาดใหญ่เกิน 10 เมกะไบต์ กรุณาเลือกภาพที่มีขนาดเล็กลง",
+        413,
+    )
+
+
+@app.route("/api/ocr", methods=["POST"])
+def recognize_image():
+    """ตรวจไฟล์ภาพในหน่วยความจำและส่งให้บริการ EasyOCR"""
+    uploaded_image = request.files.get("image")
+    if uploaded_image is None:
+        return _ocr_error(
+            "missing_image",
+            "ไม่พบไฟล์ภาพ กรุณาถ่ายหรือเลือกภาพใหม่",
+            400,
+        )
+
+    if uploaded_image.mimetype not in SUPPORTED_IMAGE_MIME_TYPES:
+        return _ocr_error(
+            "unsupported_image_type",
+            "ไฟล์ที่เลือกไม่ใช่ชนิดภาพที่รองรับ กรุณาถ่ายหรือเลือกภาพใหม่",
+            415,
+        )
+
+    image_bytes = uploaded_image.read()
+    if not _is_valid_image(image_bytes):
+        return _ocr_error(
+            "invalid_image",
+            "ไม่สามารถอ่านไฟล์นี้เป็นภาพได้ กรุณาถ่ายหรือเลือกภาพใหม่",
+            400,
+        )
+
+    try:
+        result = ocr_service.recognize(image_bytes)
+    except OCRInitializationError as error:
+        logging.error("EasyOCR initialization failed")
+        return _ocr_error("ocr_initialization_failed", str(error), 503)
+    except OCRProcessingError as error:
+        logging.error("EasyOCR inference failed")
+        return _ocr_error("ocr_processing_failed", str(error), 500)
+
+    return jsonify(result)
+
 
 @app.route("/api/status", methods=["GET"])
 def get_status():

@@ -51,7 +51,7 @@
                     <p class="step-label">ขั้นตอนที่ 1 จาก 2</p>
                     <h2 id="ocrHeading" tabindex="-1"><i class="fa-solid fa-camera" aria-hidden="true"></i> อ่านข้อความจากภาพ</h2>
                 </div>
-                <span class="badge-hint">OCR รุ่นตัวอย่าง</span>
+                <span class="badge-hint">EasyOCR ภาษาไทยและอังกฤษ</span>
             </div>
 
             <p id="ocrInstructions" class="ocr-instructions">
@@ -97,8 +97,9 @@
             <div id="ocrResultPanel" class="ocr-result" hidden>
                 <p class="step-label">ขั้นตอนที่ 2 จาก 2</p>
                 <h3 id="ocrResultHeading" tabindex="-1">ฟังและยืนยันข้อความ</h3>
-                <p class="ocr-result-label">ข้อความที่ตรวจพบ (ผลตัวอย่างสำหรับขั้นตอนที่ 1)</p>
+                <p class="ocr-result-label">ข้อความที่ตรวจพบ</p>
                 <p id="ocrRecognizedText" class="recognized-text" lang="th"></p>
+                <p id="ocrConfidenceSummary" class="input-tip" hidden></p>
                 <p id="confirmHelp" class="input-tip">
                     ปุ่มยืนยันจะใช้งานได้หลังระบบอ่านข้อความจบ การยืนยันจะเก็บผลไว้ในหน้านี้เท่านั้นและยังไม่ส่งไปยัง ESP32
                 </p>
