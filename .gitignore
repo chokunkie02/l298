@@ -12,3 +12,9 @@ htmlcov/
 uploads/
 .EasyOCR/
 *.pth
+
+# ชุดข้อมูลประเมินผล OCR จริงในเครื่อง - เป็นข้อมูลส่วนตัวของผู้ใช้แต่ละคน
+# ไม่ commit เข้า Git (คงไว้เฉพาะ evaluation/README.md และ manifest.example.csv)
+evaluation/images/
+evaluation/manifest.csv
+evaluation/results/

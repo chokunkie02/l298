@@ -543,6 +543,23 @@ body {
     font-family: var(--font-mono);
 }
 
+.ocr-quality-warnings {
+    margin: 14px 0;
+    padding: 12px 14px;
+    border: 2px solid #facc15;
+    border-left-width: 6px;
+    border-radius: var(--radius-md);
+    background: rgba(250, 204, 21, 0.08);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.ocr-quality-warnings i {
+    color: #facc15;
+    margin-right: 6px;
+}
+
 .preset-actions {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

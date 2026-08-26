@@ -16,7 +16,7 @@ const ELEMENT_IDS = [
     'reconnectBtn', 'terminalLog', 'clearLogBtn', 'alphabetGrid',
     'ocrImageInput', 'readImageBtn', 'ocrStatus', 'ocrResultPanel',
     'ocrResultHeading', 'ocrRecognizedText', 'ocrConfidenceSummary',
-    'listenAgainBtn', 'confirmOcrBtn', 'chooseAnotherBtn',
+    'ocrQualityWarnings', 'listenAgainBtn', 'confirmOcrBtn', 'chooseAnotherBtn',
     'dot1', 'dot2', 'dot3', 'dot4', 'dot5', 'dot6',
 ];
 

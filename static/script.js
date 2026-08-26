@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const ocrResultHeading = document.getElementById('ocrResultHeading');
     const ocrRecognizedText = document.getElementById('ocrRecognizedText');
     const ocrConfidenceSummary = document.getElementById('ocrConfidenceSummary');
+    const ocrQualityWarnings = document.getElementById('ocrQualityWarnings');
     const listenAgainBtn = document.getElementById('listenAgainBtn');
     const confirmOcrBtn = document.getElementById('confirmOcrBtn');
     const chooseAnotherBtn = document.getElementById('chooseAnotherBtn');
@@ -45,6 +46,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const LISTEN_AGAIN_LABEL = '<i class="fa-solid fa-volume-high" aria-hidden="true"></i> ฟังอีกครั้ง (Listen again)';
     const SPEECH_DONE_MESSAGE = 'อ่านจบแล้ว คุณสามารถยืนยัน ฟังอีกครั้ง หรือเลือกภาพใหม่ได้';
     const SPEECH_ERROR_MESSAGE = 'ไม่สามารถอ่านออกเสียงด้วยเบราว์เซอร์ได้ คุณสามารถใช้โปรแกรมอ่านหน้าจอ ยืนยัน หรือเลือกภาพใหม่ได้';
+
+    // ข้อความคำเตือนคุณภาพภาพ: เป็นเพียง heuristic ไม่ใช่การรับประกันผล OCR
+    // และต้องไม่ปิดกั้นการอ่านหรือยืนยันข้อความ (ดู image_preprocessing.py)
+    const QUALITY_WARNING_MESSAGES = {
+        dark: 'ภาพอาจมืดเกินไป กรุณาเพิ่มแสงหรือถ่ายใหม่',
+        bright: 'ภาพอาจสว่างหรือมีแสงสะท้อนมากเกินไป กรุณาลดแสงหรือถ่ายใหม่',
+        low_contrast: 'ภาพอาจมีความต่างของสีระหว่างตัวอักษรกับพื้นหลังน้อยเกินไป กรุณาถ่ายในที่ที่ตัวอักษรเห็นชัดเจนขึ้น',
+        blurry: 'ภาพอาจเบลอ กรุณาถือกล้องให้นิ่งแล้วถ่ายใหม่',
+    };
+    const QUALITY_OK_MESSAGE = 'ภาพมีความคมชัดเพียงพอสำหรับการอ่านข้อความ';
 
     // Dot circles elements (1 to 6)
     const dots = {
@@ -126,6 +137,35 @@ document.addEventListener('DOMContentLoaded', () => {
         listenAgainBtn.innerHTML = hasPlayed ? LISTEN_AGAIN_LABEL : LISTEN_FIRST_LABEL;
     }
 
+    // แสดงคำเตือนคุณภาพภาพแบบไม่พึ่งสีเพียงอย่างเดียว (มีไอคอน + ข้อความเสมอ)
+    // คืนค่ารายการข้อความที่แสดง เพื่อนำไปประกาศซ้ำผ่าน ocrStatus ด้วย
+    function renderQualityWarnings(warnings) {
+        if (!warnings || warnings.length === 0) {
+            ocrQualityWarnings.hidden = true;
+            ocrQualityWarnings.innerHTML = '';
+            return [];
+        }
+
+        const messages = warnings
+            .map(code => QUALITY_WARNING_MESSAGES[code])
+            .filter(Boolean);
+
+        if (!messages.length) {
+            ocrQualityWarnings.hidden = true;
+            ocrQualityWarnings.innerHTML = '';
+            return [];
+        }
+
+        ocrQualityWarnings.hidden = false;
+        ocrQualityWarnings.innerHTML =
+            '<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>' +
+            '<strong>คำเตือนคุณภาพภาพ (ไม่ปิดกั้นการอ่านข้อความ):</strong> ' +
+            messages.join(' ') +
+            ' คุณยังฟังและยืนยันข้อความนี้ได้ตามปกติ หรือกดปุ่ม "ถ่ายหรือเลือกภาพอื่น" เพื่อลองภาพใหม่';
+
+        return messages;
+    }
+
     function setOcrStatus(message, state = 'idle', isError = false) {
         ocrStatus.textContent = `สถานะ: ${message}`;
         ocrStatus.dataset.state = state;
@@ -141,6 +181,8 @@ document.addEventListener('DOMContentLoaded', () => {
         ocrRecognizedText.lang = 'th';
         ocrConfidenceSummary.textContent = '';
         ocrConfidenceSummary.hidden = true;
+        ocrQualityWarnings.innerHTML = '';
+        ocrQualityWarnings.hidden = true;
         ocrResultPanel.hidden = true;
         listenAgainBtn.disabled = false;
         setListenButtonLabel(false);
@@ -212,11 +254,18 @@ document.addEventListener('DOMContentLoaded', () => {
             ocrResultPanel.hidden = false;
             updateConfidenceSummary(data);
 
+            // คำเตือนคุณภาพภาพเป็น heuristic เท่านั้น ไม่ปิดกั้นการอ่านหรือยืนยัน
+            const qualityWarnings = data.image_quality ? data.image_quality.warnings : null;
+            const qualityMessages = renderQualityWarnings(qualityWarnings);
+            const qualitySuffix = qualityMessages.length
+                ? ` ${qualityMessages.join(' ')}`
+                : (data.image_quality ? ` ${QUALITY_OK_MESSAGE}` : '');
+
             if (!recognizedText) {
                 listenAgainBtn.disabled = true;
                 setConfirmEnabled(false);
                 ocrRecognizedText.textContent = 'ไม่พบข้อความ';
-                setOcrStatus('ไม่พบข้อความในภาพ กรุณาถ่ายหรือเลือกภาพใหม่', 'error', true);
+                setOcrStatus('ไม่พบข้อความในภาพ กรุณาถ่ายหรือเลือกภาพใหม่' + qualitySuffix, 'error', true);
                 return;
             }
 
@@ -228,7 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!speechSupported) {
                 listenAgainBtn.disabled = true;
                 setOcrStatus(
-                    'อ่านข้อความสำเร็จ ข้อความที่ตรวจพบแสดงไว้ด้านล่างและอ่านได้ด้วยโปรแกรมอ่านหน้าจอ เบราว์เซอร์นี้ไม่รองรับการอ่านออกเสียงอัตโนมัติ แต่สามารถกดยืนยันได้ทันที',
+                    'อ่านข้อความสำเร็จ ข้อความที่ตรวจพบแสดงไว้ด้านล่างและอ่านได้ด้วยโปรแกรมอ่านหน้าจอ เบราว์เซอร์นี้ไม่รองรับการอ่านออกเสียงอัตโนมัติ แต่สามารถกดยืนยันได้ทันที' + qualitySuffix,
                     'success'
                 );
                 ocrResultHeading.focus();
@@ -236,11 +285,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             listenAgainBtn.disabled = false;
+            const hasQualityWarning = qualityMessages.length > 0;
             setOcrStatus(
-                resultMayBeUnclear
+                (resultMayBeUnclear
                     ? 'อ่านข้อความสำเร็จ แต่ผลอาจไม่ชัดเจน พร้อมยืนยันได้ทันที กดปุ่มฟังข้อความที่ตรวจพบเพื่อฟังผลลัพธ์'
-                    : 'อ่านข้อความสำเร็จ พร้อมยืนยันได้ทันที กดปุ่มฟังข้อความที่ตรวจพบเพื่อฟังผลลัพธ์',
-                resultMayBeUnclear ? 'warning' : 'success'
+                    : 'อ่านข้อความสำเร็จ พร้อมยืนยันได้ทันที กดปุ่มฟังข้อความที่ตรวจพบเพื่อฟังผลลัพธ์'
+                ) + qualitySuffix,
+                (resultMayBeUnclear || hasQualityWarning) ? 'warning' : 'success'
             );
             listenAgainBtn.focus();
         } catch (_error) {
@@ -261,6 +312,8 @@ document.addEventListener('DOMContentLoaded', () => {
         listenAgainBtn.disabled = true;
         setConfirmEnabled(false);
         ocrConfidenceSummary.hidden = true;
+        ocrQualityWarnings.innerHTML = '';
+        ocrQualityWarnings.hidden = true;
         setOcrStatus(message, 'error', true);
     }
 

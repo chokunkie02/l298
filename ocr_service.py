@@ -68,14 +68,19 @@ class EasyOCRService:
 
         return self._reader
 
-    def recognize(self, image_bytes: bytes) -> dict[str, Any]:
-        """อ่านข้อความจากภาพและคืนข้อมูลที่พร้อมแปลงเป็น JSON"""
+    def recognize(self, image: Any) -> dict[str, Any]:
+        """อ่านข้อความจากภาพและคืนข้อมูลที่พร้อมแปลงเป็น JSON
+
+        ยอมรับ `image` เป็น raw bytes ของไฟล์ภาพ หรือ numpy array ที่ผ่านการเตรียม
+        ภาพจาก `image_preprocessing.preprocess_image()` มาแล้วก็ได้ - ทั้งสองแบบ
+        ถูกส่งต่อให้ EasyOCR โดยตรงซึ่งรองรับทั้งสองรูปแบบ
+        """
         reader = self._get_reader()
 
         try:
             # Reader เดียวถูกใช้ร่วมกัน จึงล็อกช่วง inference เพื่อหลีกเลี่ยง state ชนกัน
             with self._inference_lock:
-                raw_results = reader.readtext(image_bytes, detail=1, paragraph=False)
+                raw_results = reader.readtext(image, detail=1, paragraph=False)
         except Exception:
             raise OCRProcessingError(
                 "EasyOCR ไม่สามารถประมวลผลภาพนี้ได้ กรุณาลองถ่ายหรือเลือกภาพใหม่"

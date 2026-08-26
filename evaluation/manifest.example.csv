@@ -1,0 +1,3 @@
+image_path,ground_truth,language,notes
+images/example_thai_sign.jpg,ข้อความตัวอย่าง,th,"ตัวอย่างรูปแบบเท่านั้น ไม่มีไฟล์นี้อยู่จริง กรุณาแทนที่ด้วยภาพและ ground truth จริงของคุณ"
+images/example_english_label.jpg,SAMPLE TEXT,en,"ตัวอย่างรูปแบบเท่านั้น ไม่มีไฟล์นี้อยู่จริง กรุณาแทนที่ด้วยภาพและ ground truth จริงของคุณ"

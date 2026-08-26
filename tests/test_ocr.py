@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import app as app_module
+from image_preprocessing import ImageDecodeError, ImageTooLargeError
 from ocr_service import (
     EasyOCRService,
     OCRInitializationError,
@@ -271,6 +272,75 @@ class OCRApiTests(unittest.TestCase):
         )[0]
         self.assertNotIn("fetch(", confirmation_block)
         self.assertNotIn("sendPatternToESP32", confirmation_block)
+
+    def test_api_response_includes_structured_image_quality_and_preprocessing(self):
+        reader = FakeReader(results=[
+            ([[0, 0], [20, 0], [20, 10], [0, 10]], "สวัสดี", 0.93),
+        ])
+        app_module.ocr_service = EasyOCRService(reader_factory=Mock(return_value=reader))
+
+        response = self.post_image()
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("image_quality", payload)
+        self.assertIn("preprocessing", payload)
+
+        image_quality = payload["image_quality"]
+        self.assertEqual(
+            set(image_quality.keys()),
+            {"width", "height", "mean_brightness", "contrast", "blur_score", "warnings"},
+        )
+        self.assertIsInstance(image_quality["warnings"], list)
+
+        preprocessing = payload["preprocessing"]
+        self.assertEqual(set(preprocessing.keys()), {"mode", "upscaled"})
+        self.assertEqual(preprocessing["mode"], "resize")
+
+    def test_quality_warnings_do_not_block_ocr_success(self):
+        # ภาพทดสอบ VALID_PNG เป็นภาพ 1x1 พิกเซลสีเข้ม ซึ่งหลัง preprocessing
+        # ควรถูกตีคำเตือนเรื่องความมืด/contrast/ความเบลอ แต่ต้องไม่ทำให้ OCR ล้มเหลว
+        reader = FakeReader(results=[
+            ([[0, 0], [20, 0], [20, 10], [0, 10]], "ข้อความทดสอบ", 0.85),
+        ])
+        app_module.ocr_service = EasyOCRService(reader_factory=Mock(return_value=reader))
+
+        response = self.post_image()
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["text"], "ข้อความทดสอบ")
+        self.assertGreater(len(payload["image_quality"]["warnings"]), 0)
+
+    def test_decompression_bomb_returns_structured_413_error(self):
+        with patch.object(app_module, "preprocess_image", side_effect=ImageTooLargeError("ภาพใหญ่เกินไป")):
+            response = self.post_image()
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 413)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "image_too_large")
+
+    def test_undecodable_image_after_validation_returns_structured_400_error(self):
+        with patch.object(app_module, "preprocess_image", side_effect=ImageDecodeError("decode ไม่ได้")):
+            response = self.post_image()
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "invalid_image")
+
+    def test_preprocessing_failure_does_not_reach_ocr_service_or_serial(self):
+        mocked_service = Mock()
+        app_module.ocr_service = mocked_service
+
+        with patch.object(app_module, "preprocess_image", side_effect=ImageTooLargeError("x")):
+            with patch.object(app_module, "init_serial") as init_serial:
+                self.post_image()
+
+        mocked_service.recognize.assert_not_called()
+        init_serial.assert_not_called()
 
 
 if __name__ == "__main__":

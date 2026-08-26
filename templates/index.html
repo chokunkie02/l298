@@ -101,6 +101,14 @@
                 <p class="ocr-result-label">ข้อความที่ตรวจพบ</p>
                 <p id="ocrRecognizedText" class="recognized-text" lang="th" aria-live="polite" aria-atomic="true"></p>
                 <p id="ocrConfidenceSummary" class="input-tip" hidden></p>
+                <div
+                    id="ocrQualityWarnings"
+                    class="ocr-quality-warnings"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                    hidden
+                ></div>
                 <p id="confirmHelp" class="input-tip">
                     ปุ่มยืนยันใช้งานได้ทันทีที่อ่านข้อความจากภาพสำเร็จ ไม่ต้องรอฟังเสียงจบ การยืนยันจะเก็บผลไว้ในหน้านี้เท่านั้นและยังไม่ส่งไปยัง ESP32
                 </p>

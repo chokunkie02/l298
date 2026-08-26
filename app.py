@@ -15,6 +15,13 @@ from ocr_service import (
     OCR_LANGUAGES,
     DEFAULT_LOW_CONFIDENCE_THRESHOLD,
 )
+from image_preprocessing import (
+    DEFAULT_PREPROCESSING_MODE,
+    ImageDecodeError,
+    ImageTooLargeError,
+    compute_quality_diagnostics,
+    preprocess_image,
+)
 
 # Force UTF-8 encoding for Windows console
 if sys.platform == 'win32':
@@ -201,8 +208,22 @@ def recognize_image():
             400,
         )
 
+    # ค่าเริ่มต้นของ production คือแก้ EXIF orientation + resize อย่างปลอดภัยเท่านั้น
+    # ยังไม่ใช้ CLAHE หรือ adaptive threshold จนกว่าจะมีข้อมูลประเมินผลจริงยืนยัน
+    # ว่าช่วยเพิ่มความแม่นยำ (ดู evaluate_ocr.py และ evaluation/README.md)
     try:
-        result = ocr_service.recognize(image_bytes)
+        processed_image, preprocessing_info = preprocess_image(
+            image_bytes, mode=DEFAULT_PREPROCESSING_MODE
+        )
+    except ImageTooLargeError as error:
+        return _ocr_error("image_too_large", str(error), 413)
+    except ImageDecodeError as error:
+        return _ocr_error("invalid_image", str(error), 400)
+
+    image_quality = compute_quality_diagnostics(processed_image)
+
+    try:
+        result = ocr_service.recognize(processed_image)
     except OCRInitializationError as error:
         logging.error("EasyOCR initialization failed")
         return _ocr_error("ocr_initialization_failed", str(error), 503)
@@ -210,6 +231,8 @@ def recognize_image():
         logging.error("EasyOCR inference failed")
         return _ocr_error("ocr_processing_failed", str(error), 500)
 
+    result["image_quality"] = image_quality.to_dict()
+    result["preprocessing"] = preprocessing_info.to_dict()
     return jsonify(result)
 
 
