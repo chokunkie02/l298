@@ -34,6 +34,41 @@
     padding: 0;
 }
 
+.visually-hidden {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+.skip-link {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 1000;
+    padding: 12px 18px;
+    border-radius: var(--radius-md);
+    background: #ffffff;
+    color: #0b0f19;
+    font-weight: 700;
+    transform: translateY(-160%);
+}
+
+.skip-link:focus {
+    transform: translateY(0);
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 3px solid #facc15;
+    outline-offset: 3px;
+    box-shadow: 0 0 0 6px rgba(250, 204, 21, 0.25);
+}
+
 body {
     background-color: var(--bg-primary);
     background-image: 
@@ -209,6 +244,143 @@ body {
 
 .card-header h2 i {
     color: var(--accent-cyan);
+}
+
+/* ==========================================================================
+   Accessible OCR workflow
+   ========================================================================== */
+.ocr-card {
+    border-color: rgba(6, 182, 212, 0.35);
+}
+
+.ocr-header {
+    align-items: flex-start;
+}
+
+.ocr-header .step-label {
+    margin-bottom: 4px;
+}
+
+.step-label {
+    color: #67e8f9;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.ocr-instructions {
+    max-width: 78ch;
+    margin-bottom: 20px;
+    color: var(--text-secondary);
+}
+
+.ocr-picker-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.form-label {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.image-input {
+    width: 100%;
+    max-width: 680px;
+    min-height: 52px;
+    padding: 9px;
+    border: 2px solid rgba(255, 255, 255, 0.24);
+    border-radius: var(--radius-md);
+    background: rgba(10, 15, 26, 0.9);
+    color: var(--text-primary);
+    font: inherit;
+    cursor: pointer;
+}
+
+.image-input::file-selector-button {
+    margin-right: 12px;
+    padding: 8px 12px;
+    border: 1px solid rgba(103, 232, 249, 0.65);
+    border-radius: var(--radius-sm);
+    background: #164e63;
+    color: #ffffff;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.ocr-status {
+    margin: 18px 0;
+    padding: 14px 16px;
+    border: 2px solid rgba(148, 163, 184, 0.45);
+    border-radius: var(--radius-md);
+    background: rgba(2, 6, 23, 0.65);
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.ocr-status[data-state="processing"] {
+    border-style: dashed;
+}
+
+.ocr-status[data-state="upload"] {
+    border-color: #67e8f9;
+}
+
+.ocr-status[data-state="success"] {
+    border-color: #34d399;
+}
+
+.ocr-status[data-state="error"] {
+    border-color: #fca5a5;
+}
+
+.ocr-primary-action {
+    display: flex;
+    align-items: center;
+}
+
+.ocr-result {
+    margin-top: 24px;
+    padding-top: 22px;
+    border-top: 2px solid var(--card-border);
+}
+
+.ocr-result h3 {
+    margin: 4px 0 12px;
+    font-size: 1.1rem;
+}
+
+.ocr-result-label {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.recognized-text {
+    margin: 8px 0 12px;
+    padding: 14px 16px;
+    border-left: 4px solid var(--accent-cyan);
+    border-radius: var(--radius-sm);
+    background: rgba(10, 15, 26, 0.8);
+    font-size: 1.05rem;
+}
+
+.ocr-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 18px;
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: not-allowed;
+    filter: grayscale(0.45);
+    transform: none;
+    box-shadow: none;
 }
 
 .badge-hint {
@@ -387,7 +559,6 @@ body {
     align-items: center;
     gap: 8px;
     transition: var(--transition-fast);
-    outline: none;
 }
 
 .btn-primary {
@@ -545,4 +716,36 @@ body {
     font-size: 0.8rem;
     color: var(--text-muted);
     padding: 10px 0;
+}
+
+@media (max-width: 640px) {
+    body {
+        padding: 12px;
+    }
+
+    .card,
+    .app-header {
+        padding: 18px;
+    }
+
+    .ocr-actions,
+    .ocr-actions .btn,
+    .ocr-primary-action .btn {
+        width: 100%;
+    }
+
+    .input-with-button {
+        flex-direction: column;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
 }

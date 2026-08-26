@@ -13,11 +13,12 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+    <a class="skip-link" href="#ocrHeading">ข้ามไปยังส่วนอ่านข้อความจากภาพ</a>
     <div class="app-container">
         <!-- Header & Navbar -->
         <header class="app-header">
             <div class="brand">
-                <i class="fa-solid fa-braille brand-icon"></i>
+                <i class="fa-solid fa-braille brand-icon" aria-hidden="true"></i>
                 <div class="brand-text">
                     <h1>Braille LED Controller</h1>
                     <p class="subtitle">ระบบควบคุมแสดงผลอักษรเบรลล์ 6 จุด ผ่าน ESP32 & L298N</p>
@@ -31,16 +32,93 @@
                 </div>
                 
                 <div class="port-selector-group">
-                    <i class="fa-solid fa-plug"></i>
-                    <select id="portSelect" class="port-select" title="เลือก COM Port">
+                    <i class="fa-solid fa-plug" aria-hidden="true"></i>
+                    <label class="visually-hidden" for="portSelect">เลือกพอร์ตสำหรับเชื่อมต่อ ESP32</label>
+                    <select id="portSelect" class="port-select">
                         <option value="COM3">COM3 (Default)</option>
                     </select>
-                    <button id="reconnectBtn" class="btn btn-secondary btn-sm" title="เชื่อมต่อใหม่">
-                        <i class="fa-solid fa-rotate-right"></i>
+                    <button id="reconnectBtn" class="btn btn-secondary btn-sm" aria-label="เชื่อมต่อ ESP32 ใหม่">
+                        <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
                     </button>
                 </div>
             </div>
         </header>
+
+        <!-- Accessible OCR: image selection, spoken review, then explicit confirmation -->
+        <section class="card ocr-card" aria-labelledby="ocrHeading">
+            <div class="card-header ocr-header">
+                <div>
+                    <p class="step-label">ขั้นตอนที่ 1 จาก 2</p>
+                    <h2 id="ocrHeading" tabindex="-1"><i class="fa-solid fa-camera" aria-hidden="true"></i> อ่านข้อความจากภาพ</h2>
+                </div>
+                <span class="badge-hint">OCR รุ่นตัวอย่าง</span>
+            </div>
+
+            <p id="ocrInstructions" class="ocr-instructions">
+                เลือกภาพจากเครื่อง หรือใช้กล้องถ่ายภาพบนโทรศัพท์เมื่ออุปกรณ์รองรับ
+                จากนั้นกดปุ่ม “อ่านข้อความจากภาพ” ระบบจะอ่านข้อความที่พบให้ฟัง
+                และจะไม่ส่งข้อมูลไปยัง ESP32 จนกว่าคุณจะกดยืนยัน
+            </p>
+
+            <div class="ocr-picker-group">
+                <label for="ocrImageInput" class="form-label">เลือกหรือถ่ายภาพที่มีข้อความภาษาไทยหรือภาษาอังกฤษ</label>
+                <input
+                    type="file"
+                    id="ocrImageInput"
+                    class="image-input"
+                    accept="image/*"
+                    capture="environment"
+                    aria-describedby="ocrInstructions imageInputHelp"
+                >
+                <p id="imageInputHelp" class="input-tip">
+                    รองรับไฟล์ภาพ บนอุปกรณ์มือถืออาจเลือกใช้กล้องหลังหรือเลือกรูปจากคลังภาพได้
+                </p>
+            </div>
+
+            <div
+                id="ocrStatus"
+                class="ocr-status"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+                tabindex="-1"
+                data-state="idle"
+            >
+                สถานะ: ยังไม่ได้เลือกภาพ
+            </div>
+
+            <div class="ocr-primary-action">
+                <button id="readImageBtn" class="btn btn-primary btn-lg" type="button" disabled>
+                    <i class="fa-solid fa-volume-high" aria-hidden="true"></i>
+                    อ่านข้อความจากภาพ
+                </button>
+            </div>
+
+            <div id="ocrResultPanel" class="ocr-result" hidden>
+                <p class="step-label">ขั้นตอนที่ 2 จาก 2</p>
+                <h3 id="ocrResultHeading" tabindex="-1">ฟังและยืนยันข้อความ</h3>
+                <p class="ocr-result-label">ข้อความที่ตรวจพบ (ผลตัวอย่างสำหรับขั้นตอนที่ 1)</p>
+                <p id="ocrRecognizedText" class="recognized-text" lang="th"></p>
+                <p id="confirmHelp" class="input-tip">
+                    ปุ่มยืนยันจะใช้งานได้หลังระบบอ่านข้อความจบ การยืนยันจะเก็บผลไว้ในหน้านี้เท่านั้นและยังไม่ส่งไปยัง ESP32
+                </p>
+
+                <div class="ocr-actions" role="group" aria-label="การทำงานกับผลอ่านข้อความ">
+                    <button id="listenAgainBtn" class="btn btn-secondary" type="button">
+                        <i class="fa-solid fa-volume-high" aria-hidden="true"></i>
+                        ฟังอีกครั้ง (Listen again)
+                    </button>
+                    <button id="confirmOcrBtn" class="btn btn-success" type="button" aria-describedby="confirmHelp" disabled>
+                        <i class="fa-solid fa-check" aria-hidden="true"></i>
+                        ยืนยัน (Confirm)
+                    </button>
+                    <button id="chooseAnotherBtn" class="btn btn-secondary" type="button">
+                        <i class="fa-solid fa-camera-rotate" aria-hidden="true"></i>
+                        ถ่ายหรือเลือกภาพอื่น (Capture or choose another image)
+                    </button>
+                </div>
+            </div>
+        </section>
 
         <!-- Main Content Layout Grid -->
         <main class="main-grid">

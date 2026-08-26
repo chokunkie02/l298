@@ -20,6 +20,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const clearLogBtn = document.getElementById('clearLogBtn');
     const alphabetGrid = document.getElementById('alphabetGrid');
 
+    // Accessible OCR workflow elements
+    const ocrImageInput = document.getElementById('ocrImageInput');
+    const readImageBtn = document.getElementById('readImageBtn');
+    const ocrStatus = document.getElementById('ocrStatus');
+    const ocrResultPanel = document.getElementById('ocrResultPanel');
+    const ocrRecognizedText = document.getElementById('ocrRecognizedText');
+    const listenAgainBtn = document.getElementById('listenAgainBtn');
+    const confirmOcrBtn = document.getElementById('confirmOcrBtn');
+    const chooseAnotherBtn = document.getElementById('chooseAnotherBtn');
+
+    // Step 1 intentionally uses placeholder OCR text until a real OCR service is connected.
+    const OCR_PLACEHOLDER_TEXT = 'ข้อความตัวอย่างจากระบบ OCR: สวัสดี ยินดีต้อนรับ. Hello and welcome.';
+    const speechSupported = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+    let recognizedText = '';
+    let audioConfirmationComplete = false;
+    let speechRunId = 0;
+    let processingTimer = null;
+
     // Dot circles elements (1 to 6)
     const dots = {
         1: document.getElementById('dot1'),
@@ -54,9 +72,196 @@ document.addEventListener('DOMContentLoaded', () => {
         populateAlphabetKeyboard();
         checkConnectionStatus();
         updateVisualPreview("000000");
+        initOcrWorkflow();
 
         // Set interval to poll status every 5 seconds
         setInterval(checkConnectionStatus, 5000);
+    }
+
+    // Accessible two-step OCR flow: choose image, hear result, then explicitly confirm.
+    function initOcrWorkflow() {
+        ocrImageInput.addEventListener('change', handleImageSelection);
+        readImageBtn.addEventListener('click', processImagePlaceholder);
+        listenAgainBtn.addEventListener('click', speakRecognizedText);
+        confirmOcrBtn.addEventListener('click', confirmOcrResult);
+        chooseAnotherBtn.addEventListener('click', chooseAnotherImage);
+
+        window.addEventListener('beforeunload', stopSpeech);
+    }
+
+    function setOcrStatus(message, state = 'idle', isError = false) {
+        ocrStatus.textContent = `สถานะ: ${message}`;
+        ocrStatus.dataset.state = state;
+        ocrStatus.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+    }
+
+    function resetOcrResult() {
+        stopSpeech();
+        recognizedText = '';
+        audioConfirmationComplete = false;
+        ocrRecognizedText.textContent = '';
+        ocrResultPanel.hidden = true;
+        listenAgainBtn.disabled = false;
+        confirmOcrBtn.disabled = true;
+        confirmOcrBtn.innerHTML = '<i class="fa-solid fa-check" aria-hidden="true"></i> ยืนยัน (Confirm)';
+    }
+
+    function handleImageSelection() {
+        window.clearTimeout(processingTimer);
+        resetOcrResult();
+
+        const imageFile = ocrImageInput.files && ocrImageInput.files[0];
+        if (!imageFile) {
+            readImageBtn.disabled = true;
+            setOcrStatus('ยังไม่ได้เลือกภาพ');
+            return;
+        }
+
+        if (imageFile.type && !imageFile.type.startsWith('image/')) {
+            ocrImageInput.value = '';
+            readImageBtn.disabled = true;
+            setOcrStatus('ไฟล์ที่เลือกไม่ใช่ไฟล์ภาพ กรุณาเลือกหรือถ่ายภาพใหม่', 'error', true);
+            return;
+        }
+
+        readImageBtn.disabled = false;
+        setOcrStatus(`อัปโหลดภาพ ${imageFile.name} พร้อมสำหรับประมวลผลแล้ว กดปุ่มอ่านข้อความจากภาพ`, 'upload');
+    }
+
+    function processImagePlaceholder() {
+        const imageFile = ocrImageInput.files && ocrImageInput.files[0];
+        if (!imageFile) {
+            readImageBtn.disabled = true;
+            setOcrStatus('ไม่พบภาพ กรุณาเลือกหรือถ่ายภาพก่อน', 'error', true);
+            ocrImageInput.focus();
+            return;
+        }
+
+        stopSpeech();
+        readImageBtn.disabled = true;
+        ocrImageInput.disabled = true;
+        setOcrStatus('กำลังประมวลผลภาพ โปรดรอสักครู่', 'processing');
+        ocrStatus.focus();
+
+        // Placeholder delay makes the processing state available to assistive technology.
+        processingTimer = window.setTimeout(() => {
+            recognizedText = OCR_PLACEHOLDER_TEXT;
+            audioConfirmationComplete = false;
+            ocrRecognizedText.textContent = recognizedText;
+            ocrResultPanel.hidden = false;
+            ocrImageInput.disabled = false;
+            readImageBtn.disabled = false;
+
+            if (!speechSupported) {
+                listenAgainBtn.disabled = true;
+                confirmOcrBtn.disabled = true;
+                setOcrStatus('อ่านข้อความสำเร็จ แต่เบราว์เซอร์นี้ไม่รองรับการอ่านออกเสียง จึงยังยืนยันไม่ได้ กรุณาใช้เบราว์เซอร์ที่รองรับข้อความเป็นเสียง', 'error', true);
+                return;
+            }
+
+            setOcrStatus('อ่านข้อความสำเร็จ ระบบกำลังอ่านข้อความที่ตรวจพบให้ฟัง', 'success');
+            speakRecognizedText();
+        }, 650);
+    }
+
+    function getSpeechSegments(text) {
+        const sentences = text.match(/[^.!?…]+[.!?…]?/g) || [text];
+        return sentences
+            .map(part => part.trim())
+            .filter(Boolean)
+            .map(part => ({
+                text: part,
+                lang: /[\u0E00-\u0E7F]/.test(part) ? 'th-TH' : 'en-US'
+            }));
+    }
+
+    function findVoice(lang) {
+        const voices = window.speechSynthesis.getVoices();
+        const languageCode = lang.toLowerCase().split('-')[0];
+        return voices.find(voice => voice.lang.toLowerCase() === lang.toLowerCase())
+            || voices.find(voice => voice.lang.toLowerCase().startsWith(languageCode))
+            || null;
+    }
+
+    function speakRecognizedText() {
+        if (!recognizedText) {
+            setOcrStatus('ยังไม่มีข้อความให้อ่าน กรุณาเลือกภาพและอ่านข้อความจากภาพก่อน', 'error', true);
+            return;
+        }
+
+        if (!speechSupported) {
+            confirmOcrBtn.disabled = true;
+            setOcrStatus('เบราว์เซอร์นี้ไม่รองรับการอ่านข้อความเป็นเสียง จึงยังยืนยันไม่ได้', 'error', true);
+            return;
+        }
+
+        stopSpeech();
+        const currentRunId = ++speechRunId;
+        const segments = getSpeechSegments(recognizedText);
+        let completedSegments = 0;
+        let speechFailed = false;
+
+        audioConfirmationComplete = false;
+        confirmOcrBtn.disabled = true;
+        confirmOcrBtn.innerHTML = '<i class="fa-solid fa-check" aria-hidden="true"></i> ยืนยัน (Confirm)';
+        setOcrStatus('กำลังอ่านข้อความที่ตรวจพบให้ฟัง โปรดฟังจนจบก่อนยืนยัน', 'processing');
+
+        segments.forEach(segment => {
+            const utterance = new SpeechSynthesisUtterance(segment.text);
+            utterance.lang = segment.lang;
+            const matchingVoice = findVoice(segment.lang);
+            if (matchingVoice) utterance.voice = matchingVoice;
+
+            utterance.onend = () => {
+                if (currentRunId !== speechRunId || speechFailed) return;
+                completedSegments += 1;
+                if (completedSegments === segments.length) {
+                    audioConfirmationComplete = true;
+                    confirmOcrBtn.disabled = false;
+                    setOcrStatus('อ่านออกเสียงจบแล้ว หากข้อความถูกต้อง ให้กดปุ่มยืนยัน หรือกดฟังอีกครั้ง', 'success');
+                }
+            };
+
+            utterance.onerror = event => {
+                if (currentRunId !== speechRunId || ['canceled', 'interrupted'].includes(event.error)) return;
+                speechFailed = true;
+                audioConfirmationComplete = false;
+                confirmOcrBtn.disabled = true;
+                window.speechSynthesis.cancel();
+                setOcrStatus('ไม่สามารถอ่านออกเสียงได้ กรุณากดฟังอีกครั้ง หรือตรวจสอบการตั้งค่าเสียงของเบราว์เซอร์', 'error', true);
+            };
+
+            window.speechSynthesis.speak(utterance);
+        });
+    }
+
+    function stopSpeech() {
+        speechRunId += 1;
+        if (speechSupported) window.speechSynthesis.cancel();
+    }
+
+    function confirmOcrResult() {
+        if (!audioConfirmationComplete || !recognizedText) {
+            confirmOcrBtn.disabled = true;
+            setOcrStatus('ต้องฟังข้อความจนจบก่อนจึงจะยืนยันได้', 'error', true);
+            return;
+        }
+
+        confirmOcrBtn.disabled = true;
+        confirmOcrBtn.innerHTML = '<i class="fa-solid fa-check-double" aria-hidden="true"></i> ยืนยันแล้ว (Confirmed)';
+        setOcrStatus('ยืนยันข้อความแล้ว ผล OCR ถูกเก็บไว้ในหน้านี้และยังไม่ได้ส่งไปยัง ESP32', 'success');
+        addLog('ยืนยันผล OCR แล้ว (ยังไม่ได้ส่งข้อมูลไปยัง ESP32)', 'success');
+    }
+
+    function chooseAnotherImage() {
+        window.clearTimeout(processingTimer);
+        stopSpeech();
+        ocrImageInput.disabled = false;
+        ocrImageInput.value = '';
+        readImageBtn.disabled = true;
+        resetOcrResult();
+        setOcrStatus('พร้อมเลือกหรือถ่ายภาพอื่น');
+        ocrImageInput.click();
     }
 
     // Populate Thai & English Braille Keyboard Buttons
