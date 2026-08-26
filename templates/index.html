@@ -127,6 +127,27 @@
                         ถ่ายหรือเลือกภาพอื่น (Capture or choose another image)
                     </button>
                 </div>
+
+                <!-- Step 4: แปลข้อความที่ยืนยันแล้วเป็นอักษรเบรลล์ 6 จุด (ยังไม่ส่งไปยัง ESP32) -->
+                <div id="brailleTranslationSection" class="braille-translation-section" hidden>
+                    <h4 id="brailleTranslationHeading">การแปลงเป็นอักษรเบรลล์ 6 จุด</h4>
+                    <div
+                        id="brailleStatus"
+                        class="braille-status"
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                    ></div>
+                    <div id="brailleResultSummary" class="braille-result-summary" hidden></div>
+                    <button id="retryBrailleBtn" class="btn btn-secondary" type="button" hidden>
+                        <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
+                        ลองแปลงใหม่ (Retry translation)
+                    </button>
+                    <details id="brailleCellDetails" class="braille-cell-details" hidden>
+                        <summary>รายละเอียดรูปแบบจุด 6 บิตต่อเซลล์ (สำหรับนักพัฒนา ไม่จำเป็นสำหรับผู้ใช้)</summary>
+                        <ol id="brailleCellList" class="braille-cell-list"></ol>
+                    </details>
+                </div>
             </div>
         </section>
 

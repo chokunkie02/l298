@@ -33,6 +33,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const confirmOcrBtn = document.getElementById('confirmOcrBtn');
     const chooseAnotherBtn = document.getElementById('chooseAnotherBtn');
 
+    // Step 4: การแปลข้อความที่ยืนยันแล้วเป็นอักษรเบรลล์ 6 จุด (โครงสร้างข้อมูลเท่านั้น
+    // ไม่ส่งไปยัง ESP32 ในขั้นตอนนี้)
+    const brailleSection = document.getElementById('brailleTranslationSection');
+    const brailleStatus = document.getElementById('brailleStatus');
+    const brailleResultSummary = document.getElementById('brailleResultSummary');
+    const retryBrailleBtn = document.getElementById('retryBrailleBtn');
+    const brailleCellDetails = document.getElementById('brailleCellDetails');
+    const brailleCellList = document.getElementById('brailleCellList');
+
     const speechSupported = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
     let recognizedText = '';
     let resultMayBeUnclear = false;
@@ -188,6 +197,17 @@ document.addEventListener('DOMContentLoaded', () => {
         setListenButtonLabel(false);
         setConfirmEnabled(false);
         confirmOcrBtn.innerHTML = '<i class="fa-solid fa-check" aria-hidden="true"></i> ยืนยัน (Confirm)';
+        resetBrailleTranslation();
+    }
+
+    function resetBrailleTranslation() {
+        brailleSection.hidden = true;
+        brailleStatus.textContent = '';
+        brailleResultSummary.textContent = '';
+        brailleResultSummary.hidden = true;
+        retryBrailleBtn.hidden = true;
+        brailleCellDetails.hidden = true;
+        brailleCellList.innerHTML = '';
     }
 
     function handleImageSelection() {
@@ -460,7 +480,91 @@ document.addEventListener('DOMContentLoaded', () => {
         confirmOcrBtn.innerHTML = '<i class="fa-solid fa-check-double" aria-hidden="true"></i> ยืนยันแล้ว (Confirmed)';
         setOcrStatus('ยืนยันข้อความแล้ว ผล OCR ถูกเก็บไว้ในหน้านี้และยังไม่ได้ส่งไปยัง ESP32', 'success');
         addLog('ยืนยันผล OCR แล้ว (ยังไม่ได้ส่งข้อมูลไปยัง ESP32)', 'success');
+
+        // เริ่มแปลเป็นอักษรเบรลล์แบบ async แยกต่างหาก - ไม่บล็อกการยืนยันข้างบน
+        // และห้าม throw ออกมาเป็น unhandled rejection ไม่ว่ากรณีใด
+        translateConfirmedTextToBraille(recognizedText).catch(() => {});
     }
+
+    const BRAILLE_ERROR_MESSAGES = {
+        invalid_request_body: 'คำขอไม่ถูกต้อง',
+        missing_text: 'ไม่พบข้อความที่จะแปล',
+        invalid_text_type: 'ชนิดข้อมูลของข้อความไม่ถูกต้อง',
+        empty_text: 'ข้อความว่างเปล่า ไม่สามารถแปลงเป็นอักษรเบรลล์ได้',
+        text_too_long: 'ข้อความยาวเกินกำหนดสำหรับการแปลงเป็นอักษรเบรลล์',
+        translator_unavailable: 'เครื่องมือแปลอักษรเบรลล์ (Liblouis) ยังไม่พร้อมใช้งานบนเซิร์ฟเวอร์นี้',
+        table_unavailable: 'ไม่พบตารางอักษรเบรลล์ไทยที่ต้องใช้บนเซิร์ฟเวอร์นี้',
+        translation_timeout: 'การแปลงเป็นอักษรเบรลล์ใช้เวลานานเกินไป',
+        invalid_translator_output: 'ผลลัพธ์จากเครื่องมือแปลอักษรเบรลล์ไม่ถูกต้อง',
+        translation_failed: 'การแปลงเป็นอักษรเบรลล์ล้มเหลว',
+    };
+
+    function renderBrailleCellDetails(cells) {
+        brailleCellList.innerHTML = '';
+        cells.forEach(cell => {
+            const item = document.createElement('li');
+            item.textContent = `เซลล์ ${cell.index + 1}: ${cell.bit_pattern} (${cell.unicode_braille}) จุด: ${cell.dot_numbers.join(', ') || 'ไม่มีจุดเปิด (เซลล์ว่าง)'}`;
+            brailleCellList.appendChild(item);
+        });
+        brailleCellDetails.hidden = cells.length === 0;
+    }
+
+    // เรียกหลังยืนยันข้อความ OCR เสมอ (และเมื่อกดปุ่ม "ลองแปลงใหม่") ห่อทุก
+    // เส้นทางความล้มเหลวไว้ภายในฟังก์ชันนี้ ไม่ throw ออกไปให้ caller ต้อง catch
+    async function translateConfirmedTextToBraille(text) {
+        if (!text) return;
+
+        brailleSection.hidden = false;
+        retryBrailleBtn.hidden = true;
+        brailleResultSummary.hidden = true;
+        brailleCellDetails.hidden = true;
+        brailleStatus.textContent = 'กำลังแปลงข้อความที่ยืนยันแล้วเป็นอักษรเบรลล์ 6 จุด โปรดรอสักครู่';
+
+        try {
+            const response = await fetch('/api/braille/translate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text }),
+            });
+            const data = await response.json().catch(() => null);
+
+            if (!response.ok || !data || !data.ok) {
+                const code = data?.error?.code;
+                const friendlyMessage = BRAILLE_ERROR_MESSAGES[code] || 'ไม่สามารถแปลงข้อความเป็นอักษรเบรลล์ได้';
+                const detail = data?.error?.message ? ` (${data.error.message})` : '';
+                brailleStatus.textContent = `แปลงเป็นอักษรเบรลล์ไม่สำเร็จ: ${friendlyMessage}${detail} คุณยังฟังข้อความเดิมซ้ำและยืนยันแล้วได้ตามปกติ ลองแปลงใหม่ได้ด้วยปุ่มด้านล่าง`;
+                brailleStatus.setAttribute('aria-live', 'assertive');
+                retryBrailleBtn.hidden = false;
+                addLog(`❌ แปลงอักษรเบรลล์ไม่สำเร็จ: ${friendlyMessage}`, 'error');
+                return;
+            }
+
+            brailleStatus.setAttribute('aria-live', 'polite');
+            brailleStatus.textContent = `แปลงเป็นอักษรเบรลล์สำเร็จ จำนวน ${data.cell_count} เซลล์`;
+
+            const warningCount = (data.diagnostics || []).length;
+            const warningNote = warningCount > 0
+                ? ` มีคำเตือนระหว่างแปล ${warningCount} รายการ (ดูรายละเอียดในส่วนสำหรับนักพัฒนา)`
+                : ' ไม่มีคำเตือนระหว่างแปล';
+            brailleResultSummary.textContent =
+                `เครื่องมือแปล: ${data.engine}${data.engine_version ? ' เวอร์ชัน ' + data.engine_version : ''} ` +
+                `ตาราง: ${data.table}${warningNote} ` +
+                'ข้อมูลนี้ยังไม่ถูกส่งไปยัง ESP32';
+            brailleResultSummary.hidden = false;
+
+            renderBrailleCellDetails(data.cells || []);
+            addLog(`✓ แปลงข้อความเป็นอักษรเบรลล์สำเร็จ (${data.cell_count} เซลล์, ยังไม่ส่งไปยัง ESP32)`, 'success');
+        } catch (_error) {
+            brailleStatus.setAttribute('aria-live', 'assertive');
+            brailleStatus.textContent = 'ไม่สามารถเชื่อมต่อบริการแปลงอักษรเบรลล์ได้ กรุณาตรวจสอบเซิร์ฟเวอร์แล้วลองอีกครั้ง';
+            retryBrailleBtn.hidden = false;
+            addLog('❌ ไม่สามารถเชื่อมต่อบริการแปลงอักษรเบรลล์ได้', 'error');
+        }
+    }
+
+    retryBrailleBtn.addEventListener('click', () => {
+        translateConfirmedTextToBraille(recognizedText).catch(() => {});
+    });
 
     function chooseAnotherImage() {
         stopSpeech();

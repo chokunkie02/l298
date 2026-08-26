@@ -18,6 +18,8 @@ const ELEMENT_IDS = [
     'ocrResultHeading', 'ocrRecognizedText', 'ocrConfidenceSummary',
     'ocrQualityWarnings', 'listenAgainBtn', 'confirmOcrBtn', 'chooseAnotherBtn',
     'dot1', 'dot2', 'dot3', 'dot4', 'dot5', 'dot6',
+    'brailleTranslationSection', 'brailleStatus', 'brailleResultSummary',
+    'retryBrailleBtn', 'brailleCellDetails', 'brailleCellList',
 ];
 
 class FakeClassList {
@@ -150,6 +152,7 @@ function createEnv(options = {}) {
     };
 
     let ocrResponseQueue = [];
+    let brailleResponseQueue = [];
     const fetchCalls = [];
     function fetchMock(url, opts) {
         fetchCalls.push({ url, opts });
@@ -160,6 +163,19 @@ function createEnv(options = {}) {
             const next = ocrResponseQueue.shift();
             if (!next) {
                 return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, text: '' }) });
+            }
+            if (next.reject) {
+                return Promise.reject(next.reject);
+            }
+            return Promise.resolve({
+                ok: next.ok !== false,
+                json: () => Promise.resolve(next.body),
+            });
+        }
+        if (url === '/api/braille/translate') {
+            const next = brailleResponseQueue.shift();
+            if (!next) {
+                return Promise.reject(new Error('no /api/braille/translate response queued in test'));
             }
             if (next.reject) {
                 return Promise.reject(next.reject);
@@ -210,16 +226,29 @@ function createEnv(options = {}) {
         queueOcrNetworkError(error) {
             ocrResponseQueue.push({ reject: error || new Error('network down') });
         },
+        queueBrailleResponse(body, opts = {}) {
+            brailleResponseQueue.push({ body, ...opts });
+        },
+        queueBrailleNetworkError(error) {
+            brailleResponseQueue.push({ reject: error || new Error('network down') });
+        },
         selectImage(file) {
             elements.ocrImageInput.files = [file];
             elements.ocrImageInput.dispatch('change');
         },
+        async settle() {
+            // Allow pending fetch/json microtasks (OCR or Braille translation) to resolve.
+            await new Promise(resolve => setImmediate(resolve));
+            await new Promise(resolve => setImmediate(resolve));
+            await new Promise(resolve => setImmediate(resolve));
+        },
         async processImage() {
             elements.readImageBtn.click();
-            // Allow the pending fetch/json microtasks in processImage() to settle.
-            await new Promise(resolve => setImmediate(resolve));
-            await new Promise(resolve => setImmediate(resolve));
-            await new Promise(resolve => setImmediate(resolve));
+            await this.settle();
+        },
+        async confirmAndTranslate() {
+            elements.confirmOcrBtn.click();
+            await this.settle();
         },
     };
 }

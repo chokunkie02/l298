@@ -560,6 +560,51 @@ body {
     margin-right: 6px;
 }
 
+.braille-translation-section {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+}
+
+.braille-translation-section h4 {
+    font-size: 0.95rem;
+    margin: 0 0 8px;
+}
+
+.braille-status {
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    min-height: 1.2em;
+}
+
+.braille-result-summary {
+    margin: 10px 0;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    background: rgba(56, 189, 248, 0.08);
+    border-left: 4px solid var(--accent-cyan, #38bdf8);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.braille-cell-details {
+    margin-top: 10px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.braille-cell-details summary {
+    cursor: pointer;
+}
+
+.braille-cell-list {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    max-height: 220px;
+    overflow-y: auto;
+    padding-left: 20px;
+}
+
 .preset-actions {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

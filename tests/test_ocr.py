@@ -270,8 +270,14 @@ class OCRApiTests(unittest.TestCase):
         confirmation_block = script.split("function confirmOcrResult()", 1)[1].split(
             "function chooseAnotherImage()", 1
         )[0]
-        self.assertNotIn("fetch(", confirmation_block)
+        # Step 4: confirmation legitimately calls fetch('/api/braille/translate')
+        # (Braille translation, not ESP32) - the ESP32-specific checks below are
+        # what this test actually guards against.
         self.assertNotIn("sendPatternToESP32", confirmation_block)
+        self.assertNotIn("'/send'", confirmation_block)
+        self.assertNotIn('"/send"', confirmation_block)
+        self.assertNotIn("/api/send", confirmation_block)
+        self.assertIn("/api/braille/translate", confirmation_block)
 
     def test_api_response_includes_structured_image_quality_and_preprocessing(self):
         reader = FakeReader(results=[

@@ -22,6 +22,21 @@ from image_preprocessing import (
     compute_quality_diagnostics,
     preprocess_image,
 )
+from legacy_braille_dictionary import THAI_BRAILLE_MAP
+from braille_translation import (
+    BrailleTranslationError,
+    EmptyTextError,
+    InternalTranslationError,
+    InvalidInputTypeError,
+    InvalidTranslatorOutputError,
+    TableUnavailableError,
+    TextTooLongError,
+    TranslationTimeoutError,
+    TranslatorUnavailableError,
+    translate_text,
+    translation_response_dict,
+)
+from liblouis_translator import create_default_translator
 
 # Force UTF-8 encoding for Windows console
 if sys.platform == 'win32':
@@ -144,29 +159,46 @@ def init_serial(port_name=DEFAULT_PORT, baud_rate=DEFAULT_BAUD):
         return False, err_msg
 
 # Thai Braille Mapping Reference Dictionary (6-dot Binary Representation)
-THAI_BRAILLE_MAP = {
-    # Thai Consonants (พยัญชนะไทย)
-    "ก": "110000", "ข": "101000", "ฃ": "101000", "ค": "100100", "ฅ": "100100",
-    "ฆ": "100110", "ง": "010110", "จ": "110100", "ฉ": "101100", "ช": "100111",
-    "ซ": "101001", "ฌ": "010111", "ญ": "011011", "ฎ": "111010", "ฏ": "111110",
-    "ฐ": "101011", "ฑ": "011100", "ฒ": "011111", "ณ": "001111", "ด": "100110",
-    "ต": "011010", "ถ": "011100", "ท": "011101", "ธ": "011001", "น": "101110",
-    "บ": "111000", "ป": "111100", "ผ": "110010", "ฝ": "110011", "พ": "110110",
-    "ฟ": "110101", "ภ": "110111", "ม": "101101", "ย": "101111", "ร": "111010",
-    "ล": "111000", "ว": "011101", "ศ": "111001", "ษ": "111011", "ส": "011100",
-    "ห": "110010", "ฬ": "111011", "อ": "011011", "ฮ": "011111",
+# ย้ายไปอยู่ที่ legacy_braille_dictionary.py แล้ว (Step 4) - ดูคำเตือนเรื่องความ
+# ถูกต้องที่ยังไม่ได้ตรวจสอบในไฟล์นั้น ตัวแปรนี้ import เข้ามาเพื่อคง endpoint
+# /api/braille_dictionary เดิมไว้สำหรับการทดสอบฮาร์ดแวร์ด้วยมือเท่านั้น ไม่ถูก
+# ใช้โดยเส้นทางแปล OCR -> เบรลล์ (/api/braille/translate ด้านล่างใช้ Liblouis
+# เท่านั้น ไม่มีการ fallback มาที่พจนานุกรมนี้)
 
-    # English Letters (A-Z)
-    "A": "100000", "B": "110000", "C": "100100", "D": "100110", "E": "100010",
-    "F": "110100", "G": "110110", "H": "110010", "I": "010100", "J": "010110",
-    "K": "101000", "L": "111000", "M": "101100", "N": "101110", "O": "101010",
-    "P": "111100", "Q": "111110", "R": "111010", "S": "011100", "T": "011110",
-    "U": "101001", "V": "111001", "W": "010111", "X": "101101", "Y": "101111", "Z": "101011",
+# Translator สำหรับ POST /api/braille/translate สร้างครั้งเดียวตอน import
+# (ตรวจสภาพแวดล้อมแบบเบาเท่านั้น ไม่โหลดตารางจริงจนกว่าจะมีคำขอแปลจริง)
+braille_translator = create_default_translator()
 
-    # Numbers (0-9)
-    "1": "100000", "2": "110000", "3": "100100", "4": "100110", "5": "100010",
-    "6": "110100", "7": "110110", "8": "110010", "9": "010100", "0": "010110"
+BRAILLE_TRANSLATION_ERROR_STATUS = {
+    InvalidInputTypeError: ("invalid_text_type", 400),
+    EmptyTextError: ("empty_text", 400),
+    TextTooLongError: ("text_too_long", 413),
+    TranslatorUnavailableError: ("translator_unavailable", 503),
+    TableUnavailableError: ("table_unavailable", 503),
+    TranslationTimeoutError: ("translation_timeout", 504),
+    InvalidTranslatorOutputError: ("invalid_translator_output", 502),
+    InternalTranslationError: ("translation_failed", 500),
 }
+
+
+def _braille_error(code, message, status_code):
+    """คืน error แบบมีโครงสร้างเสมอ ไม่มี stack trace หรือ shell output ดิบใด ๆ
+    หลุดไปถึง browser (รายละเอียดดิบถูก log ไว้ฝั่งเซิร์ฟเวอร์แล้วในจุดที่เกิด)
+    """
+    return jsonify({
+        "ok": False,
+        "cells": [],
+        "cell_count": 0,
+        "diagnostics": [],
+        "line_boundaries": [],
+        "sent_to_hardware": False,
+        "message": message,
+        "error": {
+            "code": code,
+            "message": message,
+        },
+    }), status_code
+
 
 @app.route("/", methods=["GET"])
 def index():
@@ -335,6 +367,41 @@ def send_pattern():
 def get_dictionary():
     """Returns Thai & English Braille mapping dictionary."""
     return jsonify(THAI_BRAILLE_MAP)
+
+
+@app.route("/api/braille/translate", methods=["POST"])
+def translate_braille():
+    """แปลงข้อความที่ผู้ใช้ยืนยันแล้ว (จาก OCR หรือแหล่งอื่น) เป็นลำดับเซลล์
+    เบรลล์ 6 จุดด้วย Liblouis (ดู braille_translation.py/liblouis_translator.py)
+
+    **ไม่ส่งข้อมูลไปยัง Serial/ESP32 ในขั้นตอนนี้เลย** (Step 4 หยุดอยู่ที่การ
+    แปลงเป็นโครงสร้างข้อมูลเท่านั้น sent_to_hardware เป็น False เสมอในคำตอบ)
+    ไม่มีการ fallback ไปยัง legacy_braille_dictionary หากไม่มี Liblouis - จะ
+    คืน error แบบมีโครงสร้าง (translator_unavailable) แทน
+    """
+    payload = request.get_json(silent=True)
+    if payload is None or not isinstance(payload, dict):
+        return _braille_error("invalid_request_body", "ต้องส่งข้อมูลแบบ JSON ที่มีฟิลด์ text", 400)
+
+    if "text" not in payload:
+        return _braille_error("missing_text", "ไม่พบฟิลด์ text ในคำขอ", 400)
+
+    text = payload.get("text")
+
+    try:
+        translation = translate_text(text, braille_translator)
+    except tuple(BRAILLE_TRANSLATION_ERROR_STATUS.keys()) as error:
+        code, status_code = BRAILLE_TRANSLATION_ERROR_STATUS[type(error)]
+        logging.warning("Braille translation rejected (%s): %s", code, error)
+        return _braille_error(code, str(error), status_code)
+    except BrailleTranslationError as error:
+        # กันไว้สำหรับ subclass ใหม่ในอนาคตที่ยังไม่ได้ map สถานะไว้ข้างบน
+        logging.error("Unmapped BrailleTranslationError", exc_info=True)
+        return _braille_error("translation_failed", str(error), 500)
+
+    response = translation_response_dict(translation, sent_to_hardware=False)
+    response["ok"] = True
+    return jsonify(response)
 
 if __name__ == "__main__":
     print("=" * 60)
