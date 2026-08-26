@@ -20,6 +20,10 @@ const ELEMENT_IDS = [
     'dot1', 'dot2', 'dot3', 'dot4', 'dot5', 'dot6',
     'brailleTranslationSection', 'brailleStatus', 'brailleResultSummary',
     'retryBrailleBtn', 'brailleCellDetails', 'brailleCellList',
+    'braillePreviewModeLabel', 'braillePlaybackSection', 'braillePlaybackAnnouncer',
+    'brailleCurrentCellInfo', 'braillePlaybackStatusText', 'braillePlayBtn',
+    'braillePauseBtn', 'braillePreviousBtn', 'brailleNextBtn', 'brailleRestartBtn',
+    'brailleStopBtn', 'brailleCellDurationInput', 'brailleGapInput', 'brailleLinePauseInput',
 ];
 
 class FakeClassList {
@@ -115,6 +119,33 @@ function createSpeechSynthesis() {
     return synth;
 }
 
+// Timer จำลองแบบ deterministic สำหรับ static/braille_playback.js - ไม่รอเวลา
+// จริงเลย เทสต์ต้องเรียก fireAllTimers() เองเพื่อจำลองว่าเวลาผ่านไปครบกำหนด
+// ของ timer ที่ค้างอยู่ ณ ขณะนั้น (เหมือนกับ createFakeClock ใน
+// braille_playback.test.js แต่ต้องแยกกันเพราะไฟล์นี้รันผ่าน vm sandbox)
+function createFakeTimerQueue() {
+    const pending = new Map();
+    let nextId = 1;
+    return {
+        setTimeoutFn(callback, delay) {
+            const id = nextId++;
+            pending.set(id, { callback, delay });
+            return id;
+        },
+        clearTimeoutFn(id) {
+            pending.delete(id);
+        },
+        pendingCount() {
+            return pending.size;
+        },
+        fireAll() {
+            const toFire = [...pending.entries()];
+            pending.clear();
+            toFire.forEach(([, t]) => t.callback());
+        },
+    };
+}
+
 class FakeFormData {
     constructor() { this.entries = []; }
     append(name, value, filename) { this.entries.push([name, value, filename]); }
@@ -189,6 +220,7 @@ function createEnv(options = {}) {
     }
 
     const windowListeners = {};
+    const timerQueue = createFakeTimerQueue();
     const sandbox = {};
     sandbox.window = sandbox;
     sandbox.document = fakeDocument;
@@ -197,6 +229,11 @@ function createEnv(options = {}) {
     sandbox.FormData = FakeFormData;
     sandbox.setInterval = () => 0;
     sandbox.clearInterval = () => {};
+    // static/braille_playback.js ใช้ setTimeout/clearTimeout จริงเป็นค่าเริ่มต้น
+    // เมื่อไม่ได้ inject (คือกรณีการใช้งานจริงใน script.js) - vm context ไม่มี
+    // timer ของ Node ให้อัตโนมัติ จึงต้องจำลองเองแบบ deterministic ที่นี่
+    sandbox.setTimeout = timerQueue.setTimeoutFn;
+    sandbox.clearTimeout = timerQueue.clearTimeoutFn;
     sandbox.addEventListener = (type, cb) => {
         (windowListeners[type] = windowListeners[type] || []).push(cb);
     };
@@ -209,6 +246,14 @@ function createEnv(options = {}) {
     }
 
     const context = vm.createContext(sandbox);
+
+    // โหลด braille_playback.js ก่อน script.js เสมอ เลียนแบบลำดับ <script> จริง
+    // ในหน้า HTML (ดู templates/index.html) เพื่อให้ window.BraillePlaybackController
+    // พร้อมใช้งานตอน script.js สร้าง instance
+    const playbackScriptPath = path.join(__dirname, '..', '..', 'static', 'braille_playback.js');
+    const playbackScriptSource = fs.readFileSync(playbackScriptPath, 'utf-8');
+    vm.runInContext(playbackScriptSource, context, { filename: 'braille_playback.js' });
+
     const scriptPath = path.join(__dirname, '..', '..', 'static', 'script.js');
     const scriptSource = fs.readFileSync(scriptPath, 'utf-8');
     vm.runInContext(scriptSource, context, { filename: 'script.js' });
@@ -220,6 +265,14 @@ function createEnv(options = {}) {
         elements,
         speechSynthesis,
         fetchCalls,
+        // จำลองเวลาผ่านไปสำหรับ static/braille_playback.js - ยิง timer ที่ค้าง
+        // อยู่ทั้งหมด ณ ตอนนี้ (ปกติมีแค่ 1 ตัวตามสเปก Step 5)
+        fireAllTimers() {
+            timerQueue.fireAll();
+        },
+        pendingTimerCount() {
+            return timerQueue.pendingCount();
+        },
         queueOcrResponse(body, opts = {}) {
             ocrResponseQueue.push({ body, ...opts });
         },

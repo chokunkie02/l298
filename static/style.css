@@ -605,6 +605,72 @@ body {
     padding-left: 20px;
 }
 
+/* Step 5: การเล่นลำดับอักษรเบรลล์แบบจำลอง ------------------------------- */
+
+.braille-playback-section {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+}
+
+.braille-playback-section h4 {
+    font-size: 0.95rem;
+    margin: 0 0 8px;
+}
+
+.braille-current-cell-info {
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 8px 0;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    background: rgba(56, 189, 248, 0.08);
+    border-left: 4px solid var(--accent-cyan, #38bdf8);
+}
+
+.braille-playback-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 14px 0;
+}
+
+.braille-playback-controls .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.braille-playback-timing {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+    margin: 14px 0;
+}
+
+.braille-playback-timing .form-group {
+    margin: 0;
+}
+
+.braille-playback-timing input[type="number"] {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(15, 23, 42, 0.6);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+}
+
+.braille-playback-simulated-note {
+    margin-top: 10px;
+}
+
+.braille-preview-mode-label {
+    margin: 0 0 4px;
+    color: var(--accent-cyan, #38bdf8);
+}
+
 .preset-actions {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

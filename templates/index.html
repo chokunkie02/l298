@@ -147,6 +147,101 @@
                         <summary>รายละเอียดรูปแบบจุด 6 บิตต่อเซลล์ (สำหรับนักพัฒนา ไม่จำเป็นสำหรับผู้ใช้)</summary>
                         <ol id="brailleCellList" class="braille-cell-list"></ol>
                     </details>
+
+                    <!-- Step 5: เล่นลำดับอักษรเบรลล์แบบจำลอง แสดงเมื่อแปลสำเร็จเท่านั้น -->
+                    <div id="braillePlaybackSection" class="braille-playback-section" hidden>
+                        <h4 id="braillePlaybackHeading">เล่นลำดับอักษรเบรลล์ (จำลองบนหน้าจอ ไม่ส่งไปยัง ESP32)</h4>
+
+                        <!-- ประกาศเหตุการณ์สำคัญเท่านั้น (นำทางด้วยมือ, เปลี่ยนสถานะ,
+                             ขึ้นบรรทัดใหม่, เล่นครบ) - ไม่ประกาศทุกเซลล์ระหว่างเล่น
+                             อัตโนมัติ เพื่อไม่ให้โปรแกรมอ่านหน้าจอถูกถล่มด้วยข้อความ -->
+                        <div
+                            id="braillePlaybackAnnouncer"
+                            class="visually-hidden"
+                            role="status"
+                            aria-live="polite"
+                            aria-atomic="true"
+                        ></div>
+
+                        <p id="brailleCurrentCellInfo" class="braille-current-cell-info" tabindex="-1">
+                            ยังไม่เริ่มเล่น
+                        </p>
+                        <p id="braillePlaybackStatusText" class="input-tip">สถานะ: พร้อมเล่น</p>
+
+                        <div class="braille-playback-controls" role="group" aria-label="ควบคุมการเล่นอักษรเบรลล์">
+                            <button id="braillePlayBtn" class="btn btn-primary" type="button">
+                                <i class="fa-solid fa-play" aria-hidden="true"></i> เริ่มเล่น
+                            </button>
+                            <button id="braillePauseBtn" class="btn btn-secondary" type="button">
+                                <i class="fa-solid fa-pause" aria-hidden="true"></i> หยุดชั่วคราว
+                            </button>
+                            <button id="braillePreviousBtn" class="btn btn-secondary" type="button">
+                                <i class="fa-solid fa-backward-step" aria-hidden="true"></i> ก่อนหน้า
+                            </button>
+                            <button id="brailleNextBtn" class="btn btn-secondary" type="button">
+                                <i class="fa-solid fa-forward-step" aria-hidden="true"></i> ถัดไป
+                            </button>
+                            <button id="brailleRestartBtn" class="btn btn-secondary" type="button">
+                                <i class="fa-solid fa-rotate-left" aria-hidden="true"></i> เริ่มใหม่
+                            </button>
+                            <button id="brailleStopBtn" class="btn btn-secondary" type="button">
+                                <i class="fa-solid fa-stop" aria-hidden="true"></i> หยุด
+                            </button>
+                        </div>
+
+                        <div class="braille-playback-timing">
+                            <div class="form-group">
+                                <label for="brailleCellDurationInput">ระยะเวลาแสดงแต่ละเซลล์ (มิลลิวินาที)</label>
+                                <input
+                                    type="number"
+                                    id="brailleCellDurationInput"
+                                    min="300"
+                                    max="5000"
+                                    step="50"
+                                    value="900"
+                                    inputmode="numeric"
+                                    aria-describedby="brailleCellDurationHelp"
+                                >
+                                <span id="brailleCellDurationHelp" class="input-tip">300–5000 มิลลิวินาที</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="brailleGapInput">ช่วงว่างระหว่างเซลล์ (มิลลิวินาที)</label>
+                                <input
+                                    type="number"
+                                    id="brailleGapInput"
+                                    min="0"
+                                    max="2000"
+                                    step="50"
+                                    value="150"
+                                    inputmode="numeric"
+                                    aria-describedby="brailleGapHelp"
+                                >
+                                <span id="brailleGapHelp" class="input-tip">0–2000 มิลลิวินาที</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="brailleLinePauseInput">ช่วงหยุดเมื่อขึ้นบรรทัดใหม่ (มิลลิวินาที)</label>
+                                <input
+                                    type="number"
+                                    id="brailleLinePauseInput"
+                                    min="0"
+                                    max="5000"
+                                    step="50"
+                                    value="700"
+                                    inputmode="numeric"
+                                    aria-describedby="brailleLinePauseHelp"
+                                >
+                                <span id="brailleLinePauseHelp" class="input-tip">0–5000 มิลลิวินาที</span>
+                            </div>
+                        </div>
+
+                        <p class="input-tip braille-playback-simulated-note">
+                            <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+                            จอแสดงผลจุด 6 จุดด้านบนของหน้านี้ (Braille 6-Dot Matrix Preview) จะแสดง
+                            เซลล์ปัจจุบันระหว่างเล่นด้วย เป็นการจำลองบนหน้าจอเท่านั้น
+                            <strong>ไม่ได้ส่งข้อมูลไปยัง ESP32 หรือฮาร์ดแวร์จริงแต่อย่างใด</strong>
+                            ต้องกดปุ่ม "Send to ESP32" ในส่วนควบคุมด้วยมือเองเท่านั้นจึงจะส่งข้อมูลจริง
+                        </p>
+                    </div>
                 </div>
             </div>
         </section>
@@ -160,6 +255,10 @@
                     <h2><i class="fa-solid fa-eye"></i> Braille 6-Dot Matrix Preview</h2>
                     <span class="badge-hint">คลิกที่จุดเพื่อเปิด/ปิด</span>
                 </div>
+                <p id="braillePreviewModeLabel" class="input-tip braille-preview-mode-label" hidden>
+                    <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+                    กำลังแสดงเซลล์จากการเล่นอักษรเบรลล์ (จำลอง ไม่ส่งไปยัง ESP32)
+                </p>
 
                 <div class="braille-matrix-container">
                     <div class="braille-grid">
@@ -263,6 +362,7 @@
         </footer>
     </div>
 
+    <script src="{{ url_for('static', filename='braille_playback.js') }}"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

@@ -42,6 +42,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const brailleCellDetails = document.getElementById('brailleCellDetails');
     const brailleCellList = document.getElementById('brailleCellList');
 
+    // Step 5: เล่นลำดับอักษรเบรลล์แบบจำลอง (ยังไม่ส่งไปยัง ESP32)
+    const braillePreviewModeLabel = document.getElementById('braillePreviewModeLabel');
+    const braillePlaybackSection = document.getElementById('braillePlaybackSection');
+    const braillePlaybackAnnouncer = document.getElementById('braillePlaybackAnnouncer');
+    const brailleCurrentCellInfo = document.getElementById('brailleCurrentCellInfo');
+    const braillePlaybackStatusText = document.getElementById('braillePlaybackStatusText');
+    const braillePlayBtn = document.getElementById('braillePlayBtn');
+    const braillePauseBtn = document.getElementById('braillePauseBtn');
+    const braillePreviousBtn = document.getElementById('braillePreviousBtn');
+    const brailleNextBtn = document.getElementById('brailleNextBtn');
+    const brailleRestartBtn = document.getElementById('brailleRestartBtn');
+    const brailleStopBtn = document.getElementById('brailleStopBtn');
+    const brailleCellDurationInput = document.getElementById('brailleCellDurationInput');
+    const brailleGapInput = document.getElementById('brailleGapInput');
+    const brailleLinePauseInput = document.getElementById('brailleLinePauseInput');
+
     const speechSupported = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
     let recognizedText = '';
     let resultMayBeUnclear = false;
@@ -92,9 +108,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Current State
     let currentPattern = "000000";
-
-    // Initialize Page
-    initApp();
 
     function initApp() {
         populateAlphabetKeyboard();
@@ -208,7 +221,183 @@ document.addEventListener('DOMContentLoaded', () => {
         retryBrailleBtn.hidden = true;
         brailleCellDetails.hidden = true;
         brailleCellList.innerHTML = '';
+        resetBraillePlayback();
     }
+
+    // ============================================================
+    // Step 5: การเล่นลำดับอักษรเบรลล์แบบจำลอง (single-cell playback)
+    // ============================================================
+    // ตัวควบคุมสถานะ/เวลาทั้งหมดอยู่ใน static/braille_playback.js (pure module
+    // ไม่ยุ่งกับ DOM) ไฟล์นี้มีหน้าที่แค่เชื่อม callback เข้ากับ DOM/aria-live
+    // เท่านั้น - ไม่มีจุดใดเรียก fetch('/send') หรือ sendPatternToESP32() เลย
+
+    const BRAILLE_PLAYBACK_STATE_LABELS = {
+        empty: 'ยังไม่มีลำดับให้เล่น',
+        ready: 'พร้อมเล่น',
+        playing_cell: 'กำลังเล่น',
+        playing_gap: 'กำลังเล่น',
+        paused: 'หยุดชั่วคราว',
+        completed: 'เล่นครบแล้ว',
+        stopped: 'หยุดเล่นแล้ว',
+    };
+
+    // ติดตามว่าการประกาศเซลล์ล่าสุด (แบบ live) เกิดขึ้นในจังหวะเดียวกับที่กำลัง
+    // จะประกาศเปลี่ยนบรรทัดหรือไม่ เพื่อรวมสองข้อความเป็นประกาศเดียว แทนที่จะยิง
+    // aria-live ซ้อนกันสองครั้งติด ๆ กัน (ดู handleBraillePlaybackLineChange)
+    let brailleCellAnnouncedThisTransition = false;
+
+    const braillePlayback = new BraillePlaybackController({
+        onCellDisplay: handleBraillePlaybackCellDisplay,
+        onTransientBlank: handleBraillePlaybackTransientBlank,
+        onStateChange: handleBraillePlaybackStateChange,
+        onLineChange: handleBraillePlaybackLineChange,
+        onComplete: handleBraillePlaybackComplete,
+        onError: handleBraillePlaybackError,
+    });
+
+    // เรียงหมายเลขจุดแบบไทย เช่น [1,3,5] -> "1 3 และ 5" (จุดเดียวไม่มี "และ")
+    function formatDotList(dotNumbers) {
+        if (!dotNumbers || dotNumbers.length === 0) return '';
+        if (dotNumbers.length === 1) return String(dotNumbers[0]);
+        return dotNumbers.slice(0, -1).join(' ') + ' และ ' + dotNumbers[dotNumbers.length - 1];
+    }
+
+    function setBraillePlaybackAnnouncement(text) {
+        braillePlaybackAnnouncer.textContent = text;
+    }
+
+    function setBrailleButtonEnabled(button, enabled) {
+        button.disabled = !enabled;
+        button.setAttribute('aria-disabled', String(!enabled));
+    }
+
+    // เปิด/ปิดปุ่มควบคุมตามสถานะปัจจุบัน - ปุ่มที่กดแล้วไม่มีผลใด ๆ ต้องถูกปิดไว้
+    // เสมอ (เช่น เล่นครบแล้วต้องกด "เริ่มใหม่" ก่อนกด "เริ่มเล่น" ได้อีกครั้ง)
+    function updateBraillePlaybackControls(state) {
+        const hasCells = braillePlayback.getCellCount() > 0;
+        const isPlaying = state === 'playing_cell' || state === 'playing_gap';
+        const isCompleted = state === 'completed';
+
+        setBrailleButtonEnabled(braillePlayBtn, hasCells && !isPlaying && !isCompleted);
+        setBrailleButtonEnabled(braillePauseBtn, isPlaying);
+        setBrailleButtonEnabled(braillePreviousBtn, hasCells);
+        setBrailleButtonEnabled(brailleNextBtn, hasCells);
+        setBrailleButtonEnabled(brailleRestartBtn, hasCells);
+        setBrailleButtonEnabled(brailleStopBtn, hasCells && state !== 'empty' && state !== 'stopped');
+    }
+
+    // จอแสดงผลจำลอง (dot matrix เดิม) - updateVisualPreview() เป็นฟังก์ชัน
+    // บริสุทธิ์ล้วน (แค่ toggle classList) ไม่เรียก /send หรือแตะ patternInput/
+    // binaryPatternDisplay ที่ใช้ควบคุมฮาร์ดแวร์ด้วยมือเลย จึงใช้ซ้ำได้อย่าง
+    // ปลอดภัยตรงนี้โดยไม่ต้องสร้างฟังก์ชันใหม่ (ดู README.md หัวข้อ Step 5)
+    function handleBraillePlaybackCellDisplay(info) {
+        braillePreviewModeLabel.hidden = false;
+        updateVisualPreview(info.cell.bit_pattern);
+
+        const cellNumber = info.index + 1;
+        const cellText = info.isBlank
+            ? `เซลล์ ${cellNumber} จาก ${info.cellCount} เป็นช่องว่าง`
+            : `เซลล์ ${cellNumber} จาก ${info.cellCount} จุด ${formatDotList(info.cell.dot_numbers)}`;
+
+        // ข้อความปัจจุบัน (ไม่ใช่ live) - อัปเดตทุกครั้งไม่ว่าจะประกาศแบบ live
+        // หรือไม่ ผู้ใช้โปรแกรมอ่านหน้าจอเข้าถึงได้ตลอดเวลาโดยไม่ถูกขัดจังหวะ
+        brailleCurrentCellInfo.textContent =
+            `${cellText} (บรรทัดที่ ${info.lineNumber}, รูปแบบ 6 บิต: ${info.cell.bit_pattern})`;
+
+        // ประกาศแบบ live เฉพาะการนำทางด้วยมือ/เริ่มเล่น/เริ่มใหม่เท่านั้น ไม่ใช่
+        // ทุกจังหวะของการเล่นอัตโนมัติ เพื่อไม่ให้โปรแกรมอ่านหน้าจอถูกถล่มด้วย
+        // ข้อความระหว่างเล่นเร็ว ๆ (ดูสเปก Step 5 ข้อ 6)
+        brailleCellAnnouncedThisTransition = info.announce === true;
+        if (info.announce) {
+            setBraillePlaybackAnnouncement(cellText);
+        }
+    }
+
+    // ช่วงว่างชั่วคราวระหว่างเซลล์ (ไม่ใช่เซลล์ว่างจริง) - เคลียร์เฉพาะจอจำลอง
+    // เท่านั้น ไม่แตะข้อความเซลล์ปัจจุบันหรือประกาศเป็นเซลล์ใด ๆ
+    function handleBraillePlaybackTransientBlank() {
+        updateVisualPreview('000000');
+    }
+
+    function handleBraillePlaybackStateChange(state) {
+        updateBraillePlaybackControls(state);
+        braillePlaybackStatusText.textContent = `สถานะ: ${BRAILLE_PLAYBACK_STATE_LABELS[state] || state}`;
+
+        if (state === 'paused') {
+            setBraillePlaybackAnnouncement('หยุดชั่วคราว');
+        } else if (state === 'stopped') {
+            setBraillePlaybackAnnouncement('หยุดเล่นและล้างจอแสดงผลจำลองแล้ว');
+            braillePreviewModeLabel.hidden = true;
+        } else if (state === 'empty') {
+            braillePreviewModeLabel.hidden = true;
+        }
+    }
+
+    // การขึ้นบรรทัดใหม่ต้องประกาศเสมอ (ไม่ถูกจำกัดแบบเซลล์ระหว่างเล่นอัตโนมัติ)
+    // ถ้าจังหวะเดียวกันมีการประกาศเซลล์แบบ live อยู่แล้ว ให้รวมเป็นข้อความเดียว
+    // แทนที่จะยิง aria-live ซ้อนกันสองครั้งติดกัน
+    function handleBraillePlaybackLineChange(info) {
+        const lineText = `ขึ้นบรรทัดที่ ${info.lineNumber}`;
+        if (brailleCellAnnouncedThisTransition) {
+            setBraillePlaybackAnnouncement(lineText + ' ' + braillePlaybackAnnouncer.textContent);
+        } else {
+            setBraillePlaybackAnnouncement(lineText);
+        }
+        brailleCellAnnouncedThisTransition = false;
+    }
+
+    function handleBraillePlaybackComplete() {
+        setBraillePlaybackAnnouncement('เล่นลำดับเบรลล์ครบแล้ว');
+    }
+
+    function handleBraillePlaybackError(error) {
+        setBraillePlaybackAnnouncement('เกิดข้อผิดพลาดขณะเตรียมลำดับอักษรเบรลล์สำหรับเล่น');
+        addLog(`❌ Braille playback error: ${error.message}`, 'error');
+    }
+
+    function resetBraillePlayback() {
+        braillePlayback.clear();
+        braillePlaybackSection.hidden = true;
+        braillePreviewModeLabel.hidden = true;
+        brailleCurrentCellInfo.textContent = 'ยังไม่เริ่มเล่น';
+        braillePlaybackAnnouncer.textContent = '';
+    }
+
+    braillePlayBtn.addEventListener('click', () => {
+        // ก่อนเริ่มเล่นอัตโนมัติต้องหยุดเสียงพูดที่กำลังทำงานอยู่เสมอ (สเปก Step 5
+        // ข้อ 10) เพื่อไม่ให้เสียงพูดกับการเล่นเบรลล์ทับซ้อนกัน
+        stopSpeech();
+        braillePlayback.play();
+    });
+    braillePauseBtn.addEventListener('click', () => braillePlayback.pause());
+    braillePreviousBtn.addEventListener('click', () => braillePlayback.previous());
+    brailleNextBtn.addEventListener('click', () => braillePlayback.next());
+    brailleRestartBtn.addEventListener('click', () => braillePlayback.restart());
+    brailleStopBtn.addEventListener('click', () => braillePlayback.stop());
+
+    // ปรับค่าเวลาแบบ 'change' (ไม่ใช่ 'input') เพื่อไม่ตรวจสอบ/clamp ทุกครั้งที่
+    // พิมพ์แต่ละตัวอักษร - ค่าที่ clamp แล้วจะถูกสะท้อนกลับไปยัง input เสมอ
+    function applyBrailleTimingFromInputs() {
+        braillePlayback.setTiming({
+            cellDurationMs: Number(brailleCellDurationInput.value),
+            gapMs: Number(brailleGapInput.value),
+            linePauseMs: Number(brailleLinePauseInput.value),
+        });
+        const timing = braillePlayback.getTiming();
+        brailleCellDurationInput.value = timing.cellDurationMs;
+        brailleGapInput.value = timing.gapMs;
+        brailleLinePauseInput.value = timing.linePauseMs;
+    }
+
+    brailleCellDurationInput.addEventListener('change', applyBrailleTimingFromInputs);
+    brailleGapInput.addEventListener('change', applyBrailleTimingFromInputs);
+    brailleLinePauseInput.addEventListener('change', applyBrailleTimingFromInputs);
+
+    // Initialize Page - เรียกหลังประกาศ braillePlayback แล้วเท่านั้น เพราะ
+    // initOcrWorkflow() -> resetOcrResult() -> resetBrailleTranslation() ต้อง
+    // ใช้งาน braillePlayback ได้ทันที (ก่อนหน้านี้ initApp() เคยถูกเรียกไว้บนสุด
+    // ของไฟล์ ทำให้ชน temporal dead zone ของ const braillePlayback)
+    initApp();
 
     function handleImageSelection() {
         resetOcrResult();
@@ -405,6 +594,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // นโยบายที่เลือกใช้ (Step 5 ข้อ 10): ถ้าผู้ใช้กด "ฟังข้อความอีกครั้ง"
+        // ระหว่างกำลังเล่นเบรลล์อยู่ ให้หยุดการเล่นเบรลล์ชั่วคราวก่อนเสมอ (ไม่ใช่
+        // หยุดเสียงพูด) เพื่อไม่ให้ทั้งสองอย่างแข่งกันดึงความสนใจของผู้ใช้พร้อมกัน
+        // ตำแหน่งการเล่นเบรลล์ยังคงอยู่ ผู้ใช้กดเล่นต่อได้เองหลังฟังจบ
+        braillePlayback.pause();
+
         stopSpeech();
         if (window.speechSynthesis.paused) {
             window.speechSynthesis.resume();
@@ -519,6 +714,9 @@ document.addEventListener('DOMContentLoaded', () => {
         brailleResultSummary.hidden = true;
         brailleCellDetails.hidden = true;
         brailleStatus.textContent = 'กำลังแปลงข้อความที่ยืนยันแล้วเป็นอักษรเบรลล์ 6 จุด โปรดรอสักครู่';
+        // เริ่มแปลใหม่ (รวมถึงตอนกด "ลองแปลงใหม่") ต้องล้างการเล่นเบรลล์เดิมทิ้ง
+        // ก่อนเสมอ ยกเลิก timer เก่าทั้งหมด ไม่ให้ลำดับเก่าค้างอยู่ระหว่างรอผลใหม่
+        resetBraillePlayback();
 
         try {
             const response = await fetch('/api/braille/translate', {
@@ -554,6 +752,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
             renderBrailleCellDetails(data.cells || []);
             addLog(`✓ แปลงข้อความเป็นอักษรเบรลล์สำเร็จ (${data.cell_count} เซลล์, ยังไม่ส่งไปยัง ESP32)`, 'success');
+
+            // Step 5: โหลดลำดับเข้าตัวเล่น - "โหลดสำเร็จ" ไม่ได้แปลว่า "เริ่มเล่น
+            // อัตโนมัติ" ผู้ใช้ต้องกด "เริ่มเล่น" เอง ย้าย focus ไปที่ปุ่มเริ่มเล่น
+            // เพื่อให้ผู้ใช้โปรแกรมอ่านหน้าจอไปถึงส่วนควบคุมได้ทันที
+            braillePlaybackSection.hidden = false;
+            braillePlayback.load(data.cells || [], data.line_boundaries || []);
+            braillePlayBtn.focus();
         } catch (_error) {
             brailleStatus.setAttribute('aria-live', 'assertive');
             brailleStatus.textContent = 'ไม่สามารถเชื่อมต่อบริการแปลงอักษรเบรลล์ได้ กรุณาตรวจสอบเซิร์ฟเวอร์แล้วลองอีกครั้ง';
