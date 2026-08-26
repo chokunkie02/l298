@@ -93,6 +93,54 @@ python evaluate_ocr.py --manifest evaluation/manifest.csv
 - ถ้ายังไม่มี `evaluation/manifest.csv` เครื่องมือจะหยุดทำงานพร้อมคำแนะนำ
   ขั้นตอนถัดไป แทนที่จะสร้างผลลัพธ์จำลองขึ้นมาเอง
 
+## ชุดข้อมูล OCR สังเคราะห์ (Synthetic Dataset, Step 3.5)
+
+นอกจากชุดภาพถ่ายจริง (หัวข้อก่อนหน้า) โปรเจกต์นี้มี `generate_synthetic_ocr.py`
+สำหรับสร้างภาพ OCR **สังเคราะห์** จากข้อความที่รู้ ground truth แน่นอน (render
+ด้วยฟอนต์ที่คุณจัดหาเอง) แล้วจำลองสภาพกล้อง (มืด/สว่าง, มุมเอียง, perspective,
+ถ่ายไกล, เบลอ, noise, JPEG artifact ฯลฯ) แบบ deterministic (ทำซ้ำได้แน่นอนด้วย
+seed เดียวกัน) รายละเอียดเต็มอยู่ที่
+[`evaluation/synthetic/README.md`](evaluation/synthetic/README.md)
+
+**ข้อจำกัดสำคัญที่ต้องย้ำ**: ชุดข้อมูลสังเคราะห์นี้**ไม่ใช่ตัวแทนของภาพถ่ายจริง
+และห้ามใช้แทนชุดภาพถ่ายจริงใน `evaluation/`** ใช้เพื่อทดสอบว่า pipeline
+preprocessing/evaluation ทำงานถูกต้องเชิงกลไกเท่านั้น **ห้ามใช้ fine-tune โมเดล
+ใด ๆ** และ **CER ของชุดสังเคราะห์กับ CER ของชุดภาพจริงต้องไม่ถูกนำมารวมเป็น
+คะแนนเดียวกันเด็ดขาด** - ชุดภาพถ่ายจริงยังคงจำเป็นเสมอสำหรับตัดสินใจใด ๆ
+เกี่ยวกับ production
+
+ตัวอย่างคำสั่ง (ต้องระบุ `--font-dir` ของคุณเอง เครื่องมือนี้ไม่ดาวน์โหลดหรือ
+ใช้ font ของระบบปฏิบัติการเป็นค่าเริ่มต้น):
+
+```bash
+source .venv/bin/activate
+python generate_synthetic_ocr.py \
+    --corpus evaluation/synthetic/corpus.example.csv \
+    --font-dir /path/to/approved-fonts \
+    --output evaluation/generated \
+    --run-name baseline-seed-42 \
+    --variants-per-text 5 \
+    --seed 42
+
+# ประเมินผลด้วยตัวประเมินเดิม (รายงานจะระบุว่าเป็นชุดข้อมูล synthetic อัตโนมัติ)
+python evaluate_ocr.py \
+    --manifest evaluation/generated/baseline-seed-42/manifest.csv \
+    --output evaluation/results/baseline-seed-42.csv
+```
+
+- **seed เดียวกัน + corpus/font เดียวกัน → ได้ไฟล์ภาพและพารามิเตอร์ augmentation
+  เหมือนเดิมทุกไบต์เสมอ** seed ต่างกันให้ผล augmentation ต่างกัน
+- ภาพทุกใบจากข้อความต้นทางเดียวกัน (ต่างฟอนต์/variant) มี `group_id` เดียวกัน
+  เสมอ - เมื่อแบ่ง `--splits` จะแบ่งตาม `group_id` เท่านั้น (กัน data leakage
+  ระหว่าง train/val/test) และเครื่องมือจะ raise error ทันทีถ้าตรวจพบ leakage
+- `evaluate_ocr.py` จะ**ปฏิเสธไม่ทำงาน**ทันทีถ้า manifest มีทั้งแถวสังเคราะห์และ
+  แถวภาพจริงปนกัน เพื่อไม่ให้คำนวณ CER รวมที่ตีความผิด
+- ภาพที่ generate, manifest จริง, และผลประเมินไม่ถูก commit เข้า Git (ถูกกันด้วย
+  `.gitignore`) - track เฉพาะ `evaluation/synthetic/README.md` และ
+  `evaluation/synthetic/corpus.example.csv` (แม่แบบเท่านั้น)
+- ผู้ใช้ต้องตรวจสอบ license ของฟอนต์เองและตรวจสอบด้วยสายตาว่าฟอนต์แสดงสระ/
+  วรรณยุกต์ไทยถูกต้อง (การตรวจ coverage ของเครื่องมือเป็นเพียง heuristic)
+
 ## ทดสอบ
 
 ชุดทดสอบใช้ Reader จำลอง จึงไม่ดาวน์โหลดโมเดล ไม่ใช้ GPU ไม่ใช้อินเทอร์เน็ต และไม่ทำ OCR จริง:
@@ -102,7 +150,7 @@ source .venv/bin/activate
 python -m unittest discover -s tests -v
 node --check static/script.js
 node --test "tests/js/**/*.test.js"
-python -m compileall -q app.py ocr_service.py image_preprocessing.py ocr_evaluation.py evaluate_ocr.py tests
+python -m compileall -q app.py ocr_service.py image_preprocessing.py ocr_evaluation.py evaluate_ocr.py synthetic_dataset.py generate_synthetic_ocr.py tests
 git diff --check
 ```
 
@@ -111,5 +159,11 @@ git diff --check
 พร้อม DOM และ `speechSynthesis` จำลอง (`tests/js/fake-dom.js`) ไม่ต้องติดตั้ง
 แพ็กเกจ npm ใด ๆ เพิ่มเติม ส่วน `tests/test_image_preprocessing.py` และ
 `tests/test_ocr_evaluation.py` ทดสอบ preprocessing, heuristic วัดคุณภาพภาพ,
-CER/WER, และ CLI ประเมินผล ด้วยภาพเล็กที่สร้างในหน่วยความจำและ OCR reader
-จำลอง ไม่ดาวน์โหลดโมเดลหรือเรียก inference จริงเช่นกัน
+CER/WER, dataset labeling (synthetic/real_camera), และ CLI ประเมินผล ด้วยภาพ
+เล็กที่สร้างในหน่วยความจำและ OCR reader จำลอง ส่วน `tests/test_synthetic_dataset.py`
+ทดสอบตัวสร้างชุดข้อมูลสังเคราะห์ (Step 3.5): การ render, augmentation แบบ
+deterministic, การป้องกัน data leakage ระหว่าง split, และความเข้ากันได้ของ
+manifest กับ `evaluate_ocr.py` เดิม ใช้ font ที่ฝังอยู่ใน Pillow เองสำหรับกลไก
+ทั่วไป และค้นหา font ไทยที่มีอยู่แล้วในเครื่อง (ข้ามอย่างชัดเจนถ้าไม่พบ) สำหรับ
+เทสต์ที่ต้องตรวจสอบสระ/วรรณยุกต์ไทยจริง ไม่ดาวน์โหลด font, โมเดล OCR, หรือ
+dataset ใด ๆ ระหว่างรันเทสต์ทั้งหมด

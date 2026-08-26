@@ -18,3 +18,11 @@ uploads/
 evaluation/images/
 evaluation/manifest.csv
 evaluation/results/
+
+# ชุดข้อมูล OCR สังเคราะห์ (Step 3.5) - ภาพที่ generate, manifest จริง, และ
+# run metadata ล้วนสร้างใหม่ได้จาก corpus + font + seed จึงไม่ commit เข้า Git
+# คงไว้เฉพาะ evaluation/synthetic/README.md และ evaluation/synthetic/corpus.example.csv
+evaluation/generated/
+evaluation/synthetic/corpus.csv
+evaluation/synthetic/*.tmp
+evaluation/synthetic/tmp_*/

@@ -23,14 +23,39 @@ class ManifestError(ValueError):
     """เกิดขึ้นเมื่อไฟล์ manifest ไม่มีอยู่จริง อ่านไม่ได้ หรือรูปแบบไม่ถูกต้อง"""
 
 
+class MixedDatasetError(ValueError):
+    """เกิดขึ้นเมื่อ manifest มีทั้งแถวสังเคราะห์ (synthetic=true) และแถวภาพจริง
+    (synthetic=false) ปนกัน - ห้ามคำนวณ CER รวมของทั้งสองชุดเป็นคะแนนเดียว
+    (ดู evaluation/synthetic/README.md หัวข้อ "ป้องกันการรวมคะแนนผิดชุด")
+    """
+
+
+def _parse_synthetic_flag(value: str | None) -> bool:
+    """แปลงคอลัมน์ synthetic ใน manifest (สตริง) เป็น bool
+
+    ค่าที่ถือว่าเป็น True: "true"/"1"/"yes" (ไม่สนตัวพิมพ์เล็ก-ใหญ่) นอกนั้น
+    (รวมถึงคอลัมน์ที่ไม่มีอยู่เลยในไฟล์ manifest เดิม) ถือเป็น False = ภาพจริง
+    เพื่อความเข้ากันได้ย้อนหลังกับ manifest ที่ไม่มีคอลัมน์นี้เลย
+    """
+    return (value or "").strip().lower() in ("true", "1", "yes")
+
+
 @dataclass(frozen=True)
 class ManifestRow:
-    """หนึ่งแถวของชุดข้อมูลประเมินผล: ภาพหนึ่งภาพพร้อมข้อความอ้างอิงจริง"""
+    """หนึ่งแถวของชุดข้อมูลประเมินผล: ภาพหนึ่งภาพพร้อมข้อความอ้างอิงจริง
+
+    คอลัมน์ `variant` และ `synthetic` เป็นส่วนเสริมที่ generate_synthetic_ocr.py
+    (Step 3.5) เขียนลง manifest เพิ่มเติมจาก 4 คอลัมน์หลัก - ค่าเริ่มต้นว่างเปล่า/
+    False เพื่อให้ manifest ภาพจริงแบบเดิม (ไม่มีคอลัมน์เหล่านี้) ยังใช้งานได้
+    เหมือนเดิมทุกประการ (backward compatible)
+    """
 
     image_path: str
     ground_truth: str
     language: str
     notes: str
+    variant: str = ""
+    synthetic: bool = False
 
     def resolve_image_path(self, base_dir: Path) -> Path:
         """แปลง image_path (สัมพัทธ์กับตำแหน่งไฟล์ manifest) เป็น path เต็ม"""
@@ -70,10 +95,39 @@ def load_manifest(manifest_path: Path) -> list[ManifestRow]:
                     ground_truth=raw_row.get("ground_truth") or "",
                     language=(raw_row.get("language") or "").strip(),
                     notes=(raw_row.get("notes") or "").strip(),
+                    # .get(...) คืน None เมื่อคอลัมน์ไม่มีอยู่เลยในไฟล์ (manifest
+                    # ภาพจริงแบบเดิม) จึงได้ค่าเริ่มต้น ""/False ตามที่ตั้งใจ
+                    variant=(raw_row.get("variant") or "").strip(),
+                    synthetic=_parse_synthetic_flag(raw_row.get("synthetic")),
                 )
             )
 
     return rows
+
+
+def determine_dataset_label(rows: Sequence[ManifestRow]) -> str:
+    """ระบุประเภทชุดข้อมูลจากคอลัมน์ synthetic ของทุกแถวใน manifest
+
+    คืนค่า "synthetic" ถ้าทุกแถวเป็นภาพสังเคราะห์, "real_camera" ถ้าทุกแถวเป็น
+    ภาพจริง (รวมถึง manifest เดิมที่ไม่มีคอลัมน์ synthetic เลย), หรือ "unknown"
+    ถ้า rows ว่างเปล่า
+
+    raise MixedDatasetError ทันทีถ้าพบทั้งสองแบบปนกันในไฟล์เดียว เพื่อป้องกันไม่
+    ให้ CER ของชุดสังเคราะห์และชุดภาพจริงถูกคำนวณรวมเป็นคะแนนเดียวกันโดยไม่ตั้งใจ
+    """
+    flags = {row.synthetic for row in rows}
+    if not flags:
+        return "unknown"
+    if len(flags) > 1:
+        synthetic_paths = [r.image_path for r in rows if r.synthetic][:5]
+        real_paths = [r.image_path for r in rows if not r.synthetic][:5]
+        raise MixedDatasetError(
+            "manifest นี้มีทั้งแถวสังเคราะห์ (synthetic=true) และแถวภาพจริง "
+            "(synthetic=false) ปนกัน ห้ามรวมคำนวณ CER เป็นคะแนนเดียว กรุณาแยก "
+            "manifest เป็นสองไฟล์แล้วรัน evaluate_ocr.py แยกกัน ตัวอย่างแถว "
+            f"synthetic: {synthetic_paths} ตัวอย่างแถวภาพจริง: {real_paths}"
+        )
+    return "synthetic" if True in flags else "real_camera"
 
 
 def normalize_text(text: str | None) -> str:
@@ -164,6 +218,10 @@ class EvaluationRecord:
     processing_seconds: float
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
+    # ส่วนเสริมจาก Step 3.5 (ชุดข้อมูลสังเคราะห์) - ค่าเริ่มต้นว่างเปล่า/False
+    # เพื่อไม่กระทบ record ที่มาจาก manifest ภาพจริงแบบเดิม
+    variant: str = ""
+    synthetic: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -180,6 +238,8 @@ class EvaluationRecord:
             "processing_seconds": self.processing_seconds,
             "warnings": list(self.warnings),
             "error": self.error,
+            "variant": self.variant,
+            "synthetic": self.synthetic,
         }
 
 
@@ -222,14 +282,25 @@ def summarize(records: Iterable[EvaluationRecord]) -> dict[str, Any]:
 
     by_language: dict[str, list[EvaluationRecord]] = {}
     by_mode: dict[str, list[EvaluationRecord]] = {}
+    by_variant: dict[str, list[EvaluationRecord]] = {}
     for record in records:
         by_language.setdefault(record.language or "unknown", []).append(record)
         by_mode.setdefault(record.mode, []).append(record)
+        by_variant.setdefault(record.variant or "none", []).append(record)
+
+    synthetic_count = sum(1 for r in records if r.synthetic)
 
     return {
         "overall": _summarize_group(records),
         "by_language": {lang: _summarize_group(rows) for lang, rows in sorted(by_language.items())},
         "by_mode": {mode: _summarize_group(rows) for mode, rows in sorted(by_mode.items())},
+        # by_variant มีความหมายเฉพาะชุดข้อมูลสังเคราะห์ (Step 3.5) - สำหรับ
+        # manifest ภาพจริงแบบเดิมที่ไม่มีคอลัมน์ variant จะได้กลุ่มเดียวคือ "none"
+        "by_variant": {variant: _summarize_group(rows) for variant, rows in sorted(by_variant.items())},
+        "dataset_composition": {
+            "synthetic_count": synthetic_count,
+            "real_camera_count": len(records) - synthetic_count,
+        },
     }
 
 
@@ -247,6 +318,8 @@ EVALUATION_RECORD_FIELDNAMES = (
     "processing_seconds",
     "warnings",
     "error",
+    "variant",
+    "synthetic",
 )
 
 
@@ -268,8 +341,13 @@ def write_records_json(records: Iterable[EvaluationRecord], path: Path) -> None:
 
 
 def write_records(records: Iterable[EvaluationRecord], path: Path) -> None:
-    """เลือกรูปแบบไฟล์ผลลัพธ์จากนามสกุลไฟล์ (.csv หรือ .json)"""
+    """เลือกรูปแบบไฟล์ผลลัพธ์จากนามสกุลไฟล์ (.csv หรือ .json)
+
+    สร้างโฟลเดอร์ปลายทาง (เช่น evaluation/results/) ให้อัตโนมัติถ้ายังไม่มี
+    เนื่องจากโฟลเดอร์นี้ถูกกันออกจาก Git โดย .gitignore จึงไม่มีอยู่ในเครื่องใหม่
+    """
     path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     suffix = path.suffix.lower()
     if suffix == ".csv":
         write_records_csv(records, path)

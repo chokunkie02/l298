@@ -40,7 +40,9 @@ from ocr_evaluation import (
     EvaluationRecord,
     ManifestError,
     ManifestRow,
+    MixedDatasetError,
     character_error_rate,
+    determine_dataset_label,
     load_manifest,
     normalize_text,
     summarize,
@@ -96,6 +98,8 @@ def _empty_record(row: ManifestRow, mode: str, error: str) -> EvaluationRecord:
         processing_seconds=0.0,
         warnings=[],
         error=error,
+        variant=row.variant,
+        synthetic=row.synthetic,
     )
 
 
@@ -154,6 +158,8 @@ def run_evaluation(
                     processing_seconds=elapsed,
                     warnings=list(quality.warnings),
                     error=None,
+                    variant=row.variant,
+                    synthetic=row.synthetic,
                 )
             )
 
@@ -186,11 +192,26 @@ def _print_group_table(title: str, groups: dict[str, dict]) -> None:
         )
 
 
-def print_summary(summary: dict) -> None:
+_DATASET_LABEL_THAI = {
+    "synthetic": "SYNTHETIC (สังเคราะห์ - ไม่ใช่ภาพถ่ายจริง)",
+    "real_camera": "REAL_CAMERA (ภาพถ่ายจริง)",
+    "unknown": "UNKNOWN (ไม่ทราบประเภท)",
+}
+
+
+def print_summary(summary: dict, dataset_label: str) -> None:
     overall = summary["overall"]
     print("=" * 70)
+    print(f"ประเภทชุดข้อมูล: {_DATASET_LABEL_THAI.get(dataset_label, dataset_label)}")
     print("สรุปผลการประเมิน OCR (CER = Character Error Rate, ตัวชี้วัดหลัก)")
     print("=" * 70)
+    if dataset_label == "synthetic":
+        print(
+            "คำเตือน: นี่คือผลจากชุดข้อมูลสังเคราะห์ (render จากฟอนต์ + จำลองสภาพกล้อง) "
+            "ใช้เพื่อตรวจสอบ pipeline เท่านั้น ห้ามใช้แทนหรือรวมกับผลชุดภาพถ่ายจริง "
+            "และห้ามใช้สรุปว่าโหมด preprocessing ใด 'เหมาะกับ production' โดยไม่มี "
+            "หลักฐานจากชุดภาพถ่ายจริงยืนยันด้วย (ดู evaluation/synthetic/README.md)"
+        )
     print(f"จำนวนตัวอย่างทั้งหมด (ภาพ x โหมด): {overall['sample_count']}")
     print(f"สำเร็จ: {overall['success_count']}  ล้มเหลว: {overall['failure_count']}")
     print(f"CER เฉลี่ย: {_format_percent(overall['mean_cer'])}  CER มัธยฐาน: {_format_percent(overall['median_cer'])}")
@@ -199,6 +220,11 @@ def print_summary(summary: dict) -> None:
 
     _print_group_table("แยกตามภาษา (ตามคอลัมน์ language ใน manifest)", summary["by_language"])
     _print_group_table("แยกตามโหมด preprocessing", summary["by_mode"])
+
+    by_variant = summary.get("by_variant", {})
+    has_variant_info = any(name != "none" for name in by_variant)
+    if has_variant_info:
+        _print_group_table("แยกตาม augmentation variant (เฉพาะชุดข้อมูลสังเคราะห์)", by_variant)
 
     print(
         "\nหมายเหตุ: whitespace-token error rate ถูกบันทึกไว้ในไฟล์ผลลัพธ์ละเอียด "
@@ -241,7 +267,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    print(f"พบภาพในชุดข้อมูล {len(rows)} รายการ กำลังประเมินด้วยโหมด: {', '.join(args.modes)}")
+    # ตรวจประเภทชุดข้อมูล (synthetic/real_camera) ก่อนรัน OCR จริงเสมอ (fail
+    # fast) เพื่อไม่ให้เสียเวลารัน OCR กับ manifest ที่ปนกันแล้วค่อยพบปัญหาทีหลัง
+    try:
+        dataset_label = determine_dataset_label(rows)
+    except MixedDatasetError as exc:
+        print(f"หยุดการประเมิน: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"พบภาพในชุดข้อมูล {len(rows)} รายการ (ประเภท: {_DATASET_LABEL_THAI.get(dataset_label, dataset_label)}) "
+          f"กำลังประเมินด้วยโหมด: {', '.join(args.modes)}")
     if len(rows) < 20:
         print(
             f"คำแนะนำ: ชุดข้อมูลปัจจุบันมี {len(rows)} ภาพ แนะนำอย่างน้อย 20-30 ภาพ "
@@ -252,7 +287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     records = run_evaluation(rows, args.modes, ocr_service, base_dir=args.manifest.parent)
 
     summary = summarize(records)
-    print_summary(summary)
+    print_summary(summary, dataset_label)
 
     if args.output:
         write_records(records, args.output)

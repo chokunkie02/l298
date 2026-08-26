@@ -310,5 +310,173 @@ class NoSerialCouplingTests(unittest.TestCase):
         self.assertNotIn("ser_conn", source)
 
 
+class SyntheticManifestBackwardCompatibilityTests(unittest.TestCase):
+    """Step 3.5 เพิ่มคอลัมน์ variant/synthetic ลง manifest - ต้องไม่ทำให้ manifest
+    ภาพจริงแบบเดิม (ไม่มีคอลัมน์เหล่านี้) พังหรือเปลี่ยนพฤติกรรม
+    """
+
+    def test_manifest_row_defaults_when_columns_absent(self):
+        row = ev.ManifestRow(image_path="a.png", ground_truth="x", language="en", notes="")
+        self.assertEqual(row.variant, "")
+        self.assertFalse(row.synthetic)
+
+    def test_load_manifest_without_extra_columns_still_works(self):
+        # เหมือน manifest ภาพจริงเดิมทุกประการ (4 คอลัมน์เท่านั้น)
+        path = self._write_manifest_with_columns(
+            ["image_path", "ground_truth", "language", "notes"],
+            [["a.png", "hello", "en", ""]],
+        )
+        rows = ev.load_manifest(path)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].variant, "")
+        self.assertFalse(rows[0].synthetic)
+
+    def test_load_manifest_with_extra_synthetic_columns(self):
+        path = self._write_manifest_with_columns(
+            ["image_path", "ground_truth", "language", "notes", "variant", "synthetic", "font", "seed"],
+            [["images/a.png", "hello", "en", "", "dark", "true", "test.ttf", "42"]],
+        )
+        rows = ev.load_manifest(path)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].variant, "dark")
+        self.assertTrue(rows[0].synthetic)
+
+    def test_synthetic_column_false_variants_are_parsed_correctly(self):
+        path = self._write_manifest_with_columns(
+            ["image_path", "ground_truth", "language", "notes", "synthetic"],
+            [["a.png", "x", "en", "", "false"], ["b.png", "y", "en", "", ""], ["c.png", "z", "en", "", "0"]],
+        )
+        rows = ev.load_manifest(path)
+        self.assertTrue(all(not row.synthetic for row in rows))
+
+    def _write_manifest_with_columns(self, header, rows):
+        import tempfile
+
+        tmp_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp_dir, ignore_errors=True))
+        path = tmp_dir / "manifest.csv"
+        with open(path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(header)
+            writer.writerows(rows)
+        return path
+
+
+class DatasetLabelTests(unittest.TestCase):
+    def _row(self, synthetic: bool, path: str = "a.png") -> ev.ManifestRow:
+        return ev.ManifestRow(image_path=path, ground_truth="x", language="en", notes="", synthetic=synthetic)
+
+    def test_all_real_camera_rows_label_as_real_camera(self):
+        rows = [self._row(False), self._row(False)]
+        self.assertEqual(ev.determine_dataset_label(rows), "real_camera")
+
+    def test_all_synthetic_rows_label_as_synthetic(self):
+        rows = [self._row(True), self._row(True)]
+        self.assertEqual(ev.determine_dataset_label(rows), "synthetic")
+
+    def test_empty_rows_label_as_unknown(self):
+        self.assertEqual(ev.determine_dataset_label([]), "unknown")
+
+    def test_mixed_rows_raise_mixed_dataset_error(self):
+        rows = [self._row(True, "synthetic.png"), self._row(False, "real.png")]
+        with self.assertRaises(ev.MixedDatasetError):
+            ev.determine_dataset_label(rows)
+
+
+class SummarizeVariantAndCompositionTests(unittest.TestCase):
+    def _record(self, variant="", synthetic=False, cer=0.0, language="th", mode="none", error=None):
+        return ev.EvaluationRecord(
+            image_path="a.png", language=language, mode=mode, ground_truth="ก",
+            predicted_text="ก", predicted_text_raw="ก", cer=cer, token_error_rate=None,
+            exact_match=(cer == 0.0), mean_confidence=0.9, processing_seconds=0.1,
+            warnings=[], error=error, variant=variant, synthetic=synthetic,
+        )
+
+    def test_by_variant_groups_records_by_variant_name(self):
+        records = [
+            self._record(variant="clean", cer=0.0),
+            self._record(variant="clean", cer=0.2),
+            self._record(variant="dark", cer=0.5),
+        ]
+        summary = ev.summarize(records)
+        self.assertEqual(summary["by_variant"]["clean"]["sample_count"], 2)
+        self.assertEqual(summary["by_variant"]["dark"]["sample_count"], 1)
+        self.assertAlmostEqual(summary["by_variant"]["clean"]["mean_cer"], 0.1)
+
+    def test_records_without_variant_group_under_none(self):
+        summary = ev.summarize([self._record(variant="")])
+        self.assertIn("none", summary["by_variant"])
+
+    def test_dataset_composition_counts_synthetic_and_real(self):
+        records = [
+            self._record(synthetic=True), self._record(synthetic=True), self._record(synthetic=False),
+        ]
+        summary = ev.summarize(records)
+        self.assertEqual(summary["dataset_composition"]["synthetic_count"], 2)
+        self.assertEqual(summary["dataset_composition"]["real_camera_count"], 1)
+
+    def test_evaluation_record_to_dict_includes_variant_and_synthetic(self):
+        record = self._record(variant="rotated", synthetic=True)
+        payload = record.to_dict()
+        self.assertEqual(payload["variant"], "rotated")
+        self.assertTrue(payload["synthetic"])
+
+    def test_csv_output_includes_variant_and_synthetic_columns(self):
+        import tempfile
+
+        tmp_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp_dir, ignore_errors=True))
+        path = tmp_dir / "out.csv"
+        ev.write_records([self._record(variant="dark", synthetic=True)], path)
+        content = path.read_text(encoding="utf-8")
+        self.assertIn("variant", content)
+        self.assertIn("dark", content)
+        self.assertIn("synthetic", content)
+
+
+class MixedDatasetCliGuardTests(unittest.TestCase):
+    """evaluate_ocr.py ต้องปฏิเสธและหยุดทำงานทันทีถ้า manifest มีทั้งแถวสังเคราะห์
+    และแถวภาพจริงปนกัน - ไม่คำนวณ CER รวมให้เข้าใจผิด
+    """
+
+    def setUp(self):
+        import tempfile
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp_dir = Path(tmp.name)
+
+    def test_main_exits_nonzero_on_mixed_manifest(self):
+        image_path = self.tmp_dir / "sample.png"
+        Image.new("RGB", (40, 20), color=(200, 200, 200)).save(image_path)
+
+        manifest_path = self.tmp_dir / "manifest.csv"
+        with open(manifest_path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["image_path", "ground_truth", "language", "notes", "synthetic"])
+            writer.writerow(["sample.png", "hello", "en", "", "true"])
+            writer.writerow(["sample.png", "hello", "en", "", "false"])
+
+        exit_code = cli.main(["--manifest", str(manifest_path)])
+        self.assertEqual(exit_code, 1)
+
+    def test_main_succeeds_on_uniform_synthetic_manifest(self):
+        from unittest.mock import Mock, patch
+
+        image_path = self.tmp_dir / "sample.png"
+        Image.new("RGB", (40, 20), color=(200, 200, 200)).save(image_path)
+
+        manifest_path = self.tmp_dir / "manifest.csv"
+        with open(manifest_path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["image_path", "ground_truth", "language", "notes", "synthetic", "variant"])
+            writer.writerow(["sample.png", "hello", "en", "", "true", "clean"])
+
+        reader = FakeReader(text="hello")
+        with patch.object(cli, "EasyOCRService", return_value=EasyOCRService(reader_factory=Mock(return_value=reader))):
+            exit_code = cli.main(["--manifest", str(manifest_path), "--modes", "none"])
+        self.assertEqual(exit_code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
