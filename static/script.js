@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const readImageBtn = document.getElementById('readImageBtn');
     const ocrStatus = document.getElementById('ocrStatus');
     const ocrResultPanel = document.getElementById('ocrResultPanel');
+    const ocrResultHeading = document.getElementById('ocrResultHeading');
     const ocrRecognizedText = document.getElementById('ocrRecognizedText');
     const ocrConfidenceSummary = document.getElementById('ocrConfidenceSummary');
     const listenAgainBtn = document.getElementById('listenAgainBtn');
@@ -33,10 +34,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const speechSupported = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
     let recognizedText = '';
-    let audioConfirmationComplete = false;
     let resultMayBeUnclear = false;
     let ocrProcessing = false;
     let speechRunId = 0;
+    let hasPlayedSpeechOnce = false;
+    let activeUtterances = [];
+    let cachedVoices = [];
+
+    const LISTEN_FIRST_LABEL = '<i class="fa-solid fa-volume-high" aria-hidden="true"></i> ฟังข้อความที่ตรวจพบ (Listen to detected text)';
+    const LISTEN_AGAIN_LABEL = '<i class="fa-solid fa-volume-high" aria-hidden="true"></i> ฟังอีกครั้ง (Listen again)';
+    const SPEECH_DONE_MESSAGE = 'อ่านจบแล้ว คุณสามารถยืนยัน ฟังอีกครั้ง หรือเลือกภาพใหม่ได้';
+    const SPEECH_ERROR_MESSAGE = 'ไม่สามารถอ่านออกเสียงด้วยเบราว์เซอร์ได้ คุณสามารถใช้โปรแกรมอ่านหน้าจอ ยืนยัน หรือเลือกภาพใหม่ได้';
 
     // Dot circles elements (1 to 6)
     const dots = {
@@ -87,6 +95,35 @@ document.addEventListener('DOMContentLoaded', () => {
         chooseAnotherBtn.addEventListener('click', chooseAnotherImage);
 
         window.addEventListener('beforeunload', stopSpeech);
+
+        primeVoices();
+        resetOcrResult();
+    }
+
+    // Robust voice loading: warm the cache immediately and keep it fresh as the
+    // browser loads voices asynchronously, without ever blocking confirmation.
+    function primeVoices() {
+        if (!speechSupported) return;
+        refreshVoiceCache();
+        if (typeof window.speechSynthesis.addEventListener === 'function') {
+            window.speechSynthesis.addEventListener('voiceschanged', refreshVoiceCache);
+        } else {
+            window.speechSynthesis.onvoiceschanged = refreshVoiceCache;
+        }
+    }
+
+    function refreshVoiceCache() {
+        if (!speechSupported) return;
+        cachedVoices = window.speechSynthesis.getVoices() || [];
+    }
+
+    function setConfirmEnabled(enabled) {
+        confirmOcrBtn.disabled = !enabled;
+        confirmOcrBtn.setAttribute('aria-disabled', String(!enabled));
+    }
+
+    function setListenButtonLabel(hasPlayed) {
+        listenAgainBtn.innerHTML = hasPlayed ? LISTEN_AGAIN_LABEL : LISTEN_FIRST_LABEL;
     }
 
     function setOcrStatus(message, state = 'idle', isError = false) {
@@ -98,15 +135,16 @@ document.addEventListener('DOMContentLoaded', () => {
     function resetOcrResult() {
         stopSpeech();
         recognizedText = '';
-        audioConfirmationComplete = false;
         resultMayBeUnclear = false;
+        hasPlayedSpeechOnce = false;
         ocrRecognizedText.textContent = '';
         ocrRecognizedText.lang = 'th';
         ocrConfidenceSummary.textContent = '';
         ocrConfidenceSummary.hidden = true;
         ocrResultPanel.hidden = true;
         listenAgainBtn.disabled = false;
-        confirmOcrBtn.disabled = true;
+        setListenButtonLabel(false);
+        setConfirmEnabled(false);
         confirmOcrBtn.innerHTML = '<i class="fa-solid fa-check" aria-hidden="true"></i> ยืนยัน (Confirm)';
     }
 
@@ -168,7 +206,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             recognizedText = typeof data.text === 'string' ? data.text.trim() : '';
-            audioConfirmationComplete = false;
+            hasPlayedSpeechOnce = false;
             resultMayBeUnclear = Boolean(data.low_confidence);
             ocrRecognizedText.textContent = recognizedText;
             ocrResultPanel.hidden = false;
@@ -176,29 +214,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!recognizedText) {
                 listenAgainBtn.disabled = true;
-                confirmOcrBtn.disabled = true;
+                setConfirmEnabled(false);
                 ocrRecognizedText.textContent = 'ไม่พบข้อความ';
                 setOcrStatus('ไม่พบข้อความในภาพ กรุณาถ่ายหรือเลือกภาพใหม่', 'error', true);
                 return;
             }
 
+            // Confirm must be available as soon as OCR succeeds, independent of speech.
             ocrRecognizedText.lang = /[\u0E00-\u0E7F]/.test(recognizedText) ? 'th' : 'en';
-            listenAgainBtn.disabled = false;
+            setConfirmEnabled(true);
+            setListenButtonLabel(false);
 
             if (!speechSupported) {
                 listenAgainBtn.disabled = true;
-                confirmOcrBtn.disabled = true;
-                setOcrStatus('อ่านข้อความสำเร็จ แต่เบราว์เซอร์นี้ไม่รองรับการอ่านออกเสียง จึงยังยืนยันไม่ได้ กรุณาใช้เบราว์เซอร์ที่รองรับข้อความเป็นเสียง', 'error', true);
+                setOcrStatus(
+                    'อ่านข้อความสำเร็จ ข้อความที่ตรวจพบแสดงไว้ด้านล่างและอ่านได้ด้วยโปรแกรมอ่านหน้าจอ เบราว์เซอร์นี้ไม่รองรับการอ่านออกเสียงอัตโนมัติ แต่สามารถกดยืนยันได้ทันที',
+                    'success'
+                );
+                ocrResultHeading.focus();
                 return;
             }
 
+            listenAgainBtn.disabled = false;
             setOcrStatus(
                 resultMayBeUnclear
-                    ? 'อ่านข้อความสำเร็จ แต่ผลอาจไม่ชัดเจน ระบบกำลังอ่านให้ฟัง'
-                    : 'อ่านข้อความสำเร็จ ระบบกำลังอ่านข้อความที่ตรวจพบให้ฟัง',
+                    ? 'อ่านข้อความสำเร็จ แต่ผลอาจไม่ชัดเจน พร้อมยืนยันได้ทันที กดปุ่มฟังข้อความที่ตรวจพบเพื่อฟังผลลัพธ์'
+                    : 'อ่านข้อความสำเร็จ พร้อมยืนยันได้ทันที กดปุ่มฟังข้อความที่ตรวจพบเพื่อฟังผลลัพธ์',
                 resultMayBeUnclear ? 'warning' : 'success'
             );
-            speakRecognizedText();
+            listenAgainBtn.focus();
         } catch (_error) {
             showOcrFailure('ไม่สามารถเชื่อมต่อบริการ OCR ได้ กรุณาตรวจสอบเซิร์ฟเวอร์แล้วลองอีกครั้ง');
         } finally {
@@ -210,12 +254,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function showOcrFailure(message) {
         recognizedText = '';
-        audioConfirmationComplete = false;
+        hasPlayedSpeechOnce = false;
         resultMayBeUnclear = false;
         ocrRecognizedText.textContent = '';
         ocrResultPanel.hidden = false;
         listenAgainBtn.disabled = true;
-        confirmOcrBtn.disabled = true;
+        setConfirmEnabled(false);
         ocrConfidenceSummary.hidden = true;
         setOcrStatus(message, 'error', true);
     }
@@ -266,13 +310,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function findVoice(lang) {
-        const voices = window.speechSynthesis.getVoices();
+        const voices = cachedVoices.length
+            ? cachedVoices
+            : (speechSupported ? window.speechSynthesis.getVoices() : []);
         const languageCode = lang.toLowerCase().split('-')[0];
-        return voices.find(voice => voice.lang.toLowerCase() === lang.toLowerCase())
-            || voices.find(voice => voice.lang.toLowerCase().startsWith(languageCode))
+        return voices.find(voice => voice.lang && voice.lang.toLowerCase() === lang.toLowerCase())
+            || voices.find(voice => voice.lang && voice.lang.toLowerCase().startsWith(languageCode))
             || null;
     }
 
+    // Called directly from a button click handler so Chrome treats speech as
+    // user-activated, even though it plays back an OCR result fetched earlier.
     function speakRecognizedText() {
         if (!recognizedText) {
             setOcrStatus('ยังไม่มีข้อความให้อ่าน กรุณาเลือกภาพและอ่านข้อความจากภาพก่อน', 'error', true);
@@ -280,55 +328,57 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (!speechSupported) {
-            confirmOcrBtn.disabled = true;
-            setOcrStatus('เบราว์เซอร์นี้ไม่รองรับการอ่านข้อความเป็นเสียง จึงยังยืนยันไม่ได้', 'error', true);
+            setOcrStatus('เบราว์เซอร์นี้ไม่รองรับการอ่านข้อความเป็นเสียง คุณสามารถใช้โปรแกรมอ่านหน้าจอหรือกดยืนยันได้เลย', 'error', true);
             return;
         }
 
         stopSpeech();
+        if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume();
+        }
+
+        setListenButtonLabel(true);
+        hasPlayedSpeechOnce = true;
+
         const currentRunId = ++speechRunId;
         const segments = getSpeechSegments(recognizedText);
         let completedSegments = 0;
         let speechFailed = false;
 
-        audioConfirmationComplete = false;
-        confirmOcrBtn.disabled = true;
-        confirmOcrBtn.innerHTML = '<i class="fa-solid fa-check" aria-hidden="true"></i> ยืนยัน (Confirm)';
-        setOcrStatus(
-            resultMayBeUnclear
-                ? 'กำลังอ่านข้อความให้ฟัง ผล OCR อาจไม่ชัดเจน โปรดฟังจนจบก่อนเลือกยืนยัน ฟังอีกครั้ง หรือถ่ายภาพใหม่'
-                : 'กำลังอ่านข้อความที่ตรวจพบให้ฟัง โปรดฟังจนจบก่อนยืนยัน',
-            resultMayBeUnclear ? 'warning' : 'processing'
-        );
+        setOcrStatus('กำลังเตรียมอ่านออกเสียง โปรดรอสักครู่', 'processing');
 
-        segments.forEach(segment => {
+        segments.forEach((segment, index) => {
             const utterance = new SpeechSynthesisUtterance(segment.text);
             utterance.lang = segment.lang;
             const matchingVoice = findVoice(segment.lang);
             if (matchingVoice) utterance.voice = matchingVoice;
 
+            activeUtterances.push(utterance);
+
+            if (index === 0) {
+                utterance.onstart = () => {
+                    if (currentRunId !== speechRunId) return;
+                    setOcrStatus('กำลังอ่านข้อความ', 'processing');
+                };
+            }
+
             utterance.onend = () => {
                 if (currentRunId !== speechRunId || speechFailed) return;
                 completedSegments += 1;
                 if (completedSegments === segments.length) {
-                    audioConfirmationComplete = true;
-                    confirmOcrBtn.disabled = false;
-                    setOcrStatus(
-                        resultMayBeUnclear
-                            ? 'อ่านออกเสียงจบแล้ว ผลอาจไม่ชัดเจน คุณสามารถกดฟังอีกครั้ง กดยืนยัน หรือถ่ายหรือเลือกภาพอื่น'
-                            : 'อ่านออกเสียงจบแล้ว หากข้อความถูกต้อง ให้กดปุ่มยืนยัน หรือกดฟังอีกครั้ง',
-                        resultMayBeUnclear ? 'warning' : 'success'
-                    );
+                    activeUtterances = [];
+                    setOcrStatus(SPEECH_DONE_MESSAGE, 'success');
                 }
             };
 
             utterance.onerror = event => {
                 if (currentRunId !== speechRunId || ['canceled', 'interrupted'].includes(event.error)) return;
                 speechFailed = true;
-                audioConfirmationComplete = false;
-                confirmOcrBtn.disabled = true;
+                activeUtterances = [];
+                // Only the error code is logged; it is enough for developer diagnosis.
+                console.error('speechSynthesis error code:', event.error);
                 window.speechSynthesis.cancel();
-                setOcrStatus('ไม่สามารถอ่านออกเสียงได้ กรุณากดฟังอีกครั้ง หรือตรวจสอบการตั้งค่าเสียงของเบราว์เซอร์', 'error', true);
+                setOcrStatus(SPEECH_ERROR_MESSAGE, 'error', true);
             };
 
             window.speechSynthesis.speak(utterance);
@@ -337,17 +387,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function stopSpeech() {
         speechRunId += 1;
-        if (speechSupported) window.speechSynthesis.cancel();
+        activeUtterances = [];
+        if (!speechSupported) return;
+        window.speechSynthesis.cancel();
+        if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume();
+        }
     }
 
+    // Confirmation never depends on speech state: it is only gated by whether
+    // OCR produced non-empty text (see setConfirmEnabled callers).
     function confirmOcrResult() {
-        if (!audioConfirmationComplete || !recognizedText) {
-            confirmOcrBtn.disabled = true;
-            setOcrStatus('ต้องฟังข้อความจนจบก่อนจึงจะยืนยันได้', 'error', true);
+        if (!recognizedText) {
             return;
         }
 
-        confirmOcrBtn.disabled = true;
+        stopSpeech();
+        setConfirmEnabled(false);
         confirmOcrBtn.innerHTML = '<i class="fa-solid fa-check-double" aria-hidden="true"></i> ยืนยันแล้ว (Confirmed)';
         setOcrStatus('ยืนยันข้อความแล้ว ผล OCR ถูกเก็บไว้ในหน้านี้และยังไม่ได้ส่งไปยัง ESP32', 'success');
         addLog('ยืนยันผล OCR แล้ว (ยังไม่ได้ส่งข้อมูลไปยัง ESP32)', 'success');

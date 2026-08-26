@@ -37,6 +37,9 @@ python app.py
 source .venv/bin/activate
 python -m unittest discover -s tests -v
 node --check static/script.js
+node --test "tests/js/**/*.test.js"
 python -m compileall -q app.py ocr_service.py tests
 git diff --check
 ```
+
+ชุดทดสอบ `tests/js/` ครอบคลุมพฤติกรรมการอ่านออกเสียง (TTS) และปุ่มยืนยันของขั้นตอน OCR โดยรัน `static/script.js` จริงในบริบท Node `vm` พร้อม DOM และ `speechSynthesis` จำลอง (`tests/js/fake-dom.js`) ไม่ต้องติดตั้งแพ็กเกจ npm ใด ๆ เพิ่มเติม
