@@ -198,7 +198,7 @@
                                     min="300"
                                     max="5000"
                                     step="50"
-                                    value="900"
+                                    value="3000"
                                     inputmode="numeric"
                                     aria-describedby="brailleCellDurationHelp"
                                 >
@@ -292,11 +292,37 @@
 
             <div class="hardware-session-group">
                 <button id="hardwareStartBtn" class="btn btn-primary" type="button" disabled>
-                    <i class="fa-solid fa-play" aria-hidden="true"></i> เริ่มเซสชันฮาร์ดแวร์
+                    <i class="fa-solid fa-power-off" aria-hidden="true"></i> เริ่มเซสชันฮาร์ดแวร์
                 </button>
                 <button id="hardwareStopBtn" class="btn btn-danger btn-lg hardware-stop-btn" type="button" disabled>
                     <i class="fa-solid fa-hand" aria-hidden="true"></i> หยุดและล้างเซลล์
                 </button>
+
+                <div class="hardware-playback-controls" style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; width: 100%;">
+                    <button id="hardwarePlayBtn" class="btn btn-primary btn-sm" type="button" disabled>
+                        <i class="fa-solid fa-play" aria-hidden="true"></i> เล่นอัตโนมัติ
+                    </button>
+                    <button id="hardwarePauseBtn" class="btn btn-secondary btn-sm" type="button" disabled>
+                        <i class="fa-solid fa-pause" aria-hidden="true"></i> หยุดชั่วคราว
+                    </button>
+                    <button id="hardwarePrevBtn" class="btn btn-secondary btn-sm" type="button" disabled>
+                        <i class="fa-solid fa-backward-step" aria-hidden="true"></i> ก่อนหน้า
+                    </button>
+                    <button id="hardwareNextBtn" class="btn btn-secondary btn-sm" type="button" disabled>
+                        <i class="fa-solid fa-forward-step" aria-hidden="true"></i> ถัดไป
+                    </button>
+                </div>
+
+                <div id="hardwareCurrentCellCard" class="hardware-current-cell-card" style="margin-top: 12px; width: 100%; padding: 14px 16px; background: #f8fafc; border: 2px solid #0284c7; border-radius: 8px; color: #0f172a; font-weight: 600;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;">
+                        <span style="color: #0369a1; font-size: 0.9rem;"><i class="fa-solid fa-font" aria-hidden="true"></i> ตัวอักษรปัจจุบัน ณ ปัจจุบัน:</span>
+                        <span id="hardwareCurrentCharDisplay" style="font-size: 1.3rem; font-weight: 700; color: #0f172a; background: #e0f2fe; padding: 2px 12px; border-radius: 6px; border: 1px solid #7dd3fc;">—</span>
+                    </div>
+                    <div id="hardwareCurrentCellDetail" style="font-size: 0.85rem; color: #334155; margin-top: 6px; font-weight: 400; line-height: 1.5;">
+                        (เลือกตัวอักษรบนแป้นพิมพ์ กดปุ่ม "ถัดไป" หรือกดแปลข้อความเพื่อเริ่มเล่นอักษรเบรลล์)
+                    </div>
+                </div>
+
                 <p id="hardwareSendStatus" class="input-tip" role="status" aria-live="polite" aria-atomic="true">
                     สถานะการส่ง: ยังไม่เริ่มเซสชัน
                 </p>

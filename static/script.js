@@ -67,6 +67,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const hardwareConnectionStatus = document.getElementById('hardwareConnectionStatus');
     const hardwareStartBtn = document.getElementById('hardwareStartBtn');
     const hardwareStopBtn = document.getElementById('hardwareStopBtn');
+    const hardwarePlayBtn = document.getElementById('hardwarePlayBtn');
+    const hardwarePauseBtn = document.getElementById('hardwarePauseBtn');
+    const hardwarePrevBtn = document.getElementById('hardwarePrevBtn');
+    const hardwareNextBtn = document.getElementById('hardwareNextBtn');
+    const hardwareCurrentCharDisplay = document.getElementById('hardwareCurrentCharDisplay');
+    const hardwareCurrentCellDetail = document.getElementById('hardwareCurrentCellDetail');
     const hardwareSendStatus = document.getElementById('hardwareSendStatus');
     const hardwareWatchdogStatus = document.getElementById('hardwareWatchdogStatus');
     const hardwareVerifyPatternSelect = document.getElementById('hardwareVerifyPatternSelect');
@@ -372,6 +378,15 @@ document.addEventListener('DOMContentLoaded', () => {
         brailleCurrentCellInfo.textContent =
             `${cellText} (บรรทัดที่ ${info.lineNumber}, รูปแบบ 6 บิต: ${info.cell.bit_pattern})`;
 
+        if (hardwareCurrentCharDisplay) {
+            const displayChar = info.cell.source_text || info.cell.unicode_braille || info.cell.bit_pattern;
+            hardwareCurrentCharDisplay.textContent = `'${displayChar}'`;
+            if (hardwareCurrentCellDetail) {
+                const dotStr = info.cell.dot_numbers && info.cell.dot_numbers.length ? info.cell.dot_numbers.join(', ') : 'ไม่มี (ล้าง)';
+                hardwareCurrentCellDetail.textContent = `เซลล์ที่ ${cellNumber} จาก ${info.cellCount} | รูปแบบ 6 บิต: ${info.cell.bit_pattern} | จุดเปิด: [${dotStr}] | บรรทัดที่ ${info.lineNumber}`;
+            }
+        }
+
         // ประกาศแบบ live เฉพาะการนำทางด้วยมือ/เริ่มเล่น/เริ่มใหม่เท่านั้น ไม่ใช่
         // ทุกจังหวะของการเล่นอัตโนมัติ เพื่อไม่ให้โปรแกรมอ่านหน้าจอถูกถล่มด้วย
         // ข้อความระหว่างเล่นเร็ว ๆ (ดูสเปก Step 5 ข้อ 6)
@@ -392,11 +407,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function handleBraillePlaybackStateChange(state) {
         updateBraillePlaybackControls(state);
+        updateHardwareControlAvailability();
         braillePlaybackStatusText.textContent = `สถานะ: ${BRAILLE_PLAYBACK_STATE_LABELS[state] || state}`;
 
         if (state === 'paused') {
             setBraillePlaybackAnnouncement('หยุดชั่วคราว');
-            notifyHardware('handlePlaybackEnded', 'หยุดการเล่นชั่วคราว');
+            // สำคัญ: การหยุดชั่วคราว (Pause) ห้ามสั่ง stopSession! แค่ส่ง transient gap เพื่อดับไฟชั่วคราวและรักษาเซสชันไว้
+            notifyHardware('sendTransientGap');
         } else if (state === 'stopped') {
             setBraillePlaybackAnnouncement('หยุดเล่นและล้างจอแสดงผลจำลองแล้ว');
             braillePreviewModeLabel.hidden = true;
@@ -441,15 +458,23 @@ document.addEventListener('DOMContentLoaded', () => {
         braillePlaybackAnnouncer.textContent = '';
     }
 
-    braillePlayBtn.addEventListener('click', () => {
-        // ก่อนเริ่มเล่นอัตโนมัติต้องหยุดเสียงพูดที่กำลังทำงานอยู่เสมอ (สเปก Step 5
-        // ข้อ 10) เพื่อไม่ให้เสียงพูดกับการเล่นเบรลล์ทับซ้อนกัน
+    braillePlayBtn.addEventListener('click', async () => {
+        await ensureHardwareSessionActive();
         stopSpeech();
+        applyBrailleTimingFromInputs();
         braillePlayback.play();
     });
     braillePauseBtn.addEventListener('click', () => braillePlayback.pause());
-    braillePreviousBtn.addEventListener('click', () => braillePlayback.previous());
-    brailleNextBtn.addEventListener('click', () => braillePlayback.next());
+    braillePreviousBtn.addEventListener('click', async () => {
+        await ensureHardwareSessionActive();
+        applyBrailleTimingFromInputs();
+        braillePlayback.previous();
+    });
+    brailleNextBtn.addEventListener('click', async () => {
+        await ensureHardwareSessionActive();
+        applyBrailleTimingFromInputs();
+        braillePlayback.next();
+    });
     brailleRestartBtn.addEventListener('click', () => braillePlayback.restart());
     brailleStopBtn.addEventListener('click', () => braillePlayback.stop());
 
@@ -494,12 +519,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const connected = hardwareBridge.isPortConnected();
         const sessionActive = hardwareBridge.isSessionActive();
 
+        const hasCells = braillePlayback.getCellCount() > 0;
+        const state = braillePlayback.getState();
+        const isPlaying = state === 'playing_cell' || state === 'playing_gap';
+        const isCompleted = state === 'completed';
+
         setEnabled(hardwarePortSelect, modeOn && !sessionActive);
         setEnabled(hardwareRefreshPortsBtn, modeOn);
         setEnabled(hardwareConnectBtn, modeOn && !sessionActive);
         setEnabled(hardwareStartBtn, modeOn && connected && !sessionActive);
         // ปุ่มหยุดต้องกดได้ทุกครั้งที่มีเซสชัน และเข้าถึงด้วยคีย์บอร์ดได้เสมอ
         setEnabled(hardwareStopBtn, sessionActive);
+
+        setEnabled(hardwarePlayBtn, modeOn && connected && hasCells && !isPlaying && !isCompleted);
+        setEnabled(hardwarePauseBtn, modeOn && connected && isPlaying);
+        setEnabled(hardwarePrevBtn, modeOn && connected && hasCells);
+        setEnabled(hardwareNextBtn, modeOn && connected && hasCells);
+
         setEnabled(hardwareVerifyActivateBtn, modeOn && connected && sessionActive);
         setEnabled(hardwareVerifyClearBtn, modeOn && connected && sessionActive);
     }
@@ -583,6 +619,50 @@ document.addEventListener('DOMContentLoaded', () => {
             await hardwareBridge.stopSession('กดปุ่มหยุดและล้างเซลล์');
             updateHardwareControlAvailability();
         });
+
+    async function ensureHardwareSessionActive() {
+        if (hardwareBridge && hardwareBridge.isHardwareModeEnabled() && hardwareBridge.isPortConnected() && !hardwareBridge.isSessionActive()) {
+            await hardwareBridge.startSession({ watchdogSeconds: 10 });
+            if (braillePlayback.getCellCount() > 0 && (braillePlayback.getState() === 'completed' || braillePlayback.getState() === 'stopped')) {
+                braillePlayback.restart();
+            }
+        }
+    }
+
+    if (hardwarePlayBtn) {
+        hardwarePlayBtn.addEventListener('click', async () => {
+            await ensureHardwareSessionActive();
+            stopSpeech();
+            applyBrailleTimingFromInputs();
+            braillePlayback.play();
+            updateHardwareControlAvailability();
+        });
+    }
+
+    if (hardwarePauseBtn) {
+        hardwarePauseBtn.addEventListener('click', () => {
+            braillePlayback.pause();
+            updateHardwareControlAvailability();
+        });
+    }
+
+    if (hardwarePrevBtn) {
+        hardwarePrevBtn.addEventListener('click', async () => {
+            await ensureHardwareSessionActive();
+            applyBrailleTimingFromInputs();
+            braillePlayback.previous();
+            updateHardwareControlAvailability();
+        });
+    }
+
+    if (hardwareNextBtn) {
+        hardwareNextBtn.addEventListener('click', async () => {
+            await ensureHardwareSessionActive();
+            applyBrailleTimingFromInputs();
+            braillePlayback.next();
+            updateHardwareControlAvailability();
+        });
+    }
 
         if (hardwareVerifyActivateBtn) {
             hardwareVerifyActivateBtn.addEventListener('click', () => {
@@ -1038,6 +1118,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const pattern = BRAILLE_DICT[char];
                 setPattern(pattern);
                 sendPatternToESP32(pattern, `ส่งตัวอักษร '${char}' (${pattern})`);
+                if (hardwareCurrentCharDisplay) {
+                    hardwareCurrentCharDisplay.textContent = `'${char}'`;
+                    if (hardwareCurrentCellDetail) {
+                        hardwareCurrentCellDetail.textContent = `รูปแบบ 6 บิต: ${pattern} (ส่งข้อมูลตัวอักษรเดี่ยวสำเร็จ)`;
+                    }
+                }
             });
             alphabetGrid.appendChild(btn);
         });

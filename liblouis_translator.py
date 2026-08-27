@@ -298,22 +298,27 @@ def create_default_translator(
     timeout: float = DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
 ):
     """เลือก Liblouis adapter ที่ดีที่สุดที่หาได้ในเครื่องนี้ (Python binding
-    ก่อนเสมอถ้ามี ไม่งั้นใช้ CLI) คืน UnavailableBrailleTranslator พร้อมเหตุผล
-    ชัดเจนถ้าไม่พบทั้งสองแบบ - ไม่เคย fallback ไปยัง legacy dictionary
+    ก่อนเสมอถ้ามี ไม่งั้นใช้ CLI) หากไม่พบทั้งสองแบบ จะ fallback ไปยัง
+    LegacyDictionaryTranslator เพื่อเปิดใช้งานการแปลจากพจนานุกรมในเครื่อง
     """
-    from braille_translation import UnavailableBrailleTranslator
-
     if _python_binding_module_available():
         return LiblouisPythonAdapter(table=table)
 
     if _cli_tool_path(_LOU_TRANSLATE_CANDIDATES) is not None:
         return LiblouisSubprocessAdapter(table=table, timeout=timeout)
 
-    return UnavailableBrailleTranslator(
-        table=table,
-        reason=(
-            "ไม่พบ Liblouis ในเครื่องนี้ (ไม่มีทั้ง Python binding 'import louis' "
-            "และคำสั่ง lou_translate) กรุณาติดตั้ง Liblouis ระดับระบบก่อน "
-            "ดูวิธีติดตั้งใน README.md หัวข้อ 'การแปลข้อความเป็นอักษรเบรลล์'"
-        ),
-    )
+    try:
+        from legacy_braille_dictionary import LegacyDictionaryTranslator
+        logger.info("ไม่พบ Liblouis ในเครื่อง - ใช้งาน LegacyDictionaryTranslator เป็นตัวแปลสำรอง")
+        return LegacyDictionaryTranslator(enabled=True)
+    except Exception:
+        from braille_translation import UnavailableBrailleTranslator
+        return UnavailableBrailleTranslator(
+            table=table,
+            reason=(
+                "ไม่พบ Liblouis ในเครื่องนี้ (ไม่มีทั้ง Python binding 'import louis' "
+                "และคำสั่ง lou_translate) กรุณาติดตั้ง Liblouis ระดับระบบก่อน "
+                "ดูวิธีติดตั้งใน README.md หัวข้อ 'การแปลข้อความเป็นอักษรเบรลล์'"
+            ),
+        )
+

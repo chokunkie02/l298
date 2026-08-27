@@ -35,7 +35,7 @@ from braille_hardware import (
 logger = logging.getLogger(__name__)
 
 #: เส้นตาย watchdog เริ่มต้น (วินาที) - ปรับได้ตอน start()
-DEFAULT_WATCHDOG_SECONDS = 4.0
+DEFAULT_WATCHDOG_SECONDS = 10.0
 #: เส้นตายสูงสุดที่ยอมให้ตั้ง - กันการตั้งค่ายาวจนไร้ความหมาย
 MAX_WATCHDOG_SECONDS = 30.0
 MIN_WATCHDOG_SECONDS = 1.0
