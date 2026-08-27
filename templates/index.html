@@ -246,6 +246,105 @@
             </div>
         </section>
 
+        <!-- Step 6: โหมดฮาร์ดแวร์จริง (แยกจากการเล่นจำลอง ปิดอยู่เสมอตอนโหลดหน้า) -->
+        <section class="card hardware-card" aria-labelledby="hardwareHeading">
+            <div class="card-header">
+                <h2 id="hardwareHeading"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> โหมดฮาร์ดแวร์จริง (ส่งไปยัง ESP32 ผ่าน Serial)</h2>
+                <span class="badge-hint">ปิดอยู่โดยค่าเริ่มต้น</span>
+            </div>
+
+            <p class="hardware-warning">
+                <strong>คำเตือน:</strong> เมื่อเปิดโหมดนี้ อุปกรณ์จริงอาจ<strong>ขยับหรือมีการจ่ายพลังงาน</strong>
+                ระบบจะส่งเฉพาะรูปแบบจุด 6 บิตที่ตรวจสอบแล้ว (ASCII 6 หลัก + ขึ้นบรรทัด) ที่ 115200 บอด
+                <strong>ไม่ส่งข้อความ OCR</strong> เฟิร์มแวร์ปัจจุบัน<strong>ไม่มีการยืนยัน (ACK)</strong>
+                ระบบจึงบอกได้เพียงว่า "ส่งคำสั่งผ่าน Serial แล้ว" ไม่สามารถยืนยันว่าเซลล์ถูกแสดงผลบนฮาร์ดแวร์จริง
+                การเล่นแบบจำลองบนหน้าจอยังใช้งานได้ตามปกติแยกจากโหมดนี้
+            </p>
+
+            <div class="hardware-optin">
+                <label class="hardware-optin-label" for="hardwareModeToggle">
+                    <input type="checkbox" id="hardwareModeToggle">
+                    เปิดโหมดฮาร์ดแวร์จริง (ยืนยันว่าเข้าใจว่าอุปกรณ์อาจขยับหรือจ่ายพลังงาน)
+                </label>
+                <p id="hardwareModeStatus" class="input-tip" role="status" aria-live="polite" aria-atomic="true">
+                    สถานะ: โหมดฮาร์ดแวร์จริงปิดอยู่
+                </p>
+            </div>
+
+            <div class="hardware-port-group">
+                <label for="hardwarePortSelect">เลือกพอร์ต Serial (ต้องเลือกเอง ระบบไม่เดาชนิดอุปกรณ์)</label>
+                <select id="hardwarePortSelect" class="port-select" disabled>
+                    <option value="">— ยังไม่ได้เลือกพอร์ต —</option>
+                </select>
+                <button id="hardwareRefreshPortsBtn" class="btn btn-secondary btn-sm" type="button" disabled>
+                    <i class="fa-solid fa-rotate-right" aria-hidden="true"></i> รีเฟรชรายการพอร์ต
+                </button>
+                <button id="hardwareConnectBtn" class="btn btn-secondary btn-sm" type="button" disabled>
+                    <i class="fa-solid fa-plug" aria-hidden="true"></i> เชื่อมต่อพอร์ตที่เลือก
+                </button>
+                <p id="hardwareConnectionStatus" class="input-tip" role="status" aria-live="polite" aria-atomic="true">
+                    สถานะการเชื่อมต่อ: ยังไม่ได้เชื่อมต่อ
+                </p>
+                <p id="hardwarePortIdentityNote" class="input-tip">
+                    พอร์ตทุกช่องแสดงเป็น "อุปกรณ์ Serial ที่ยังไม่ได้ยืนยันชนิด" จนกว่าจะยืนยันตัวตนได้จริง
+                </p>
+            </div>
+
+            <div class="hardware-session-group">
+                <button id="hardwareStartBtn" class="btn btn-primary" type="button" disabled>
+                    <i class="fa-solid fa-play" aria-hidden="true"></i> เริ่มเซสชันฮาร์ดแวร์
+                </button>
+                <button id="hardwareStopBtn" class="btn btn-danger btn-lg hardware-stop-btn" type="button" disabled>
+                    <i class="fa-solid fa-hand" aria-hidden="true"></i> หยุดและล้างเซลล์
+                </button>
+                <p id="hardwareSendStatus" class="input-tip" role="status" aria-live="polite" aria-atomic="true">
+                    สถานะการส่ง: ยังไม่เริ่มเซสชัน
+                </p>
+                <p id="hardwareWatchdogStatus" class="input-tip" role="status" aria-live="assertive" aria-atomic="true"></p>
+                <p class="input-tip">
+                    <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+                    ตัวจับเวลาความปลอดภัยฝั่งโฮสต์ (watchdog) จะสั่งล้างเซลล์หากไม่มีคำสั่งต่อเนื่อง
+                    <strong>แต่ป้องกันไม่ได้เมื่อคอมพิวเตอร์แครช สาย USB หลุด หรือไฟดับ</strong>
+                    ยังต้องมี watchdog ระดับเฟิร์มแวร์สำหรับ actuator ที่อาจร้อนเกิน
+                </p>
+            </div>
+
+            <details class="hardware-verify" id="hardwareVerifySection">
+                <summary>โหมดตรวจสอบลำดับจุดด้วยมือ (ทดสอบทีละจุด ไม่ใช่การเล่นอัตโนมัติ)</summary>
+                <p class="input-tip">
+                    ทดสอบทีละรูปแบบ เริ่มด้วยล้างเซลล์เสมอ ระบบ<strong>ไม่ทดสอบเปิดทุกจุดอัตโนมัติ</strong>
+                    การทดสอบนี้ยืนยันเฉพาะ<strong>ลำดับจุดเชิงตรรกะ 1–6</strong> ไม่ได้ยืนยันหมายเลขขา GPIO ของ ESP32
+                    บันทึกผลถูกเก็บไว้ในหน้านี้เท่านั้น ไม่ commit เข้า Git
+                </p>
+                <label for="hardwareVerifyPatternSelect">รูปแบบที่จะทดสอบ</label>
+                <select id="hardwareVerifyPatternSelect">
+                    <option value="000000">000000 — ล้างเซลล์</option>
+                    <option value="100000">100000 — จุด 1</option>
+                    <option value="010000">010000 — จุด 2</option>
+                    <option value="001000">001000 — จุด 3</option>
+                    <option value="000100">000100 — จุด 4</option>
+                    <option value="000010">000010 — จุด 5</option>
+                    <option value="000001">000001 — จุด 6</option>
+                </select>
+                <button id="hardwareVerifyActivateBtn" class="btn btn-secondary btn-sm" type="button" disabled>ส่งรูปแบบนี้</button>
+                <button id="hardwareVerifyClearBtn" class="btn btn-secondary btn-sm" type="button" disabled>ล้างเซลล์</button>
+                <div class="form-group">
+                    <label for="hardwareVerifyObservedInput">จุดที่สังเกตเห็นจริงบนฮาร์ดแวร์</label>
+                    <input type="text" id="hardwareVerifyObservedInput" autocomplete="off" placeholder="เช่น จุด 1">
+                </div>
+                <div class="form-group">
+                    <label for="hardwareVerifyOutcomeSelect">ผล</label>
+                    <select id="hardwareVerifyOutcomeSelect">
+                        <option value="unknown">ไม่แน่ใจ</option>
+                        <option value="pass">ผ่าน</option>
+                        <option value="fail">ไม่ผ่าน</option>
+                    </select>
+                </div>
+                <button id="hardwareVerifyRecordBtn" class="btn btn-secondary btn-sm" type="button">บันทึกผลสังเกต (เฉพาะในหน้านี้)</button>
+                <ul id="hardwareVerifyLog" class="hardware-verify-log"></ul>
+            </details>
+        </section>
+
         <!-- Main Content Layout Grid -->
         <main class="main-grid">
             
@@ -363,6 +462,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='braille_playback.js') }}"></script>
+    <script src="{{ url_for('static', filename='braille_hardware.js') }}"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

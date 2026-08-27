@@ -881,3 +881,95 @@ body {
         transition-duration: 0.01ms !important;
     }
 }
+
+/* ============================================================
+   Step 6: โหมดฮาร์ดแวร์จริง (hardware playback opt-in)
+   ============================================================ */
+.hardware-card {
+    border: 2px solid #b45309;
+}
+
+.hardware-warning {
+    background: #fff7ed;
+    border-left: 4px solid #b45309;
+    padding: 12px 14px;
+    border-radius: 8px;
+    line-height: 1.6;
+}
+
+.hardware-optin {
+    margin: 16px 0;
+    padding: 12px 14px;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+}
+
+.hardware-optin-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.hardware-optin-label input {
+    margin-top: 4px;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}
+
+.hardware-port-group,
+.hardware-session-group {
+    margin: 16px 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.hardware-port-group label,
+.hardware-session-group + .hardware-verify,
+.hardware-port-group .input-tip,
+.hardware-session-group .input-tip {
+    flex-basis: 100%;
+}
+
+.hardware-stop-btn {
+    /* ปุ่มหยุดต้องเด่น ไม่พึ่งสีอย่างเดียว - มีไอคอน + ข้อความ + ขอบหนา */
+    border: 3px solid #7f1d1d;
+    font-weight: 700;
+}
+
+.hardware-stop-btn:disabled {
+    opacity: 0.5;
+}
+
+#hardwareWatchdogStatus:not(:empty) {
+    background: #fef2f2;
+    border-left: 4px solid #b91c1c;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-weight: 600;
+}
+
+.hardware-verify {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+}
+
+.hardware-verify summary {
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.hardware-verify-log {
+    margin-top: 10px;
+    padding-left: 18px;
+    font-size: 0.9rem;
+    line-height: 1.6;
+}

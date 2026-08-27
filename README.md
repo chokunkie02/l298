@@ -408,17 +408,165 @@ localStorage หรือส่งไปที่ analytics ใด ๆ - รี�
   ให้สอดคล้องกับ protocol Serial เดิม (`/send`, 6 หลัก `0`/`1`) และควรมีกลไก
   เปิด/ปิดการส่งจริงอย่างชัดเจน (opt-in) ไม่ส่งอัตโนมัติโดยไม่ได้รับอนุญาต
 
+## การเชื่อมต่อฮาร์ดแวร์แบบมีการ์ด (Guarded Hardware Playback, Step 6)
+
+Step 6 เชื่อม "ขอบเขตผลลัพธ์การเล่น" ของ Step 5 เข้ากับเส้นทาง Serial จริง โดย
+**เปิดใช้งานเมื่อผู้ใช้ยินยอมอย่างชัดเจนเท่านั้น** หยุดได้อย่างปลอดภัย validate
+เข้ม และทดสอบด้วย mock ได้ทั้งหมด
+
+### สถานะความปลอดภัย ณ ปัจจุบัน (สรุปจากการตรวจ repo)
+
+| หัวข้อ | สถานะ | หลักฐาน |
+| --- | --- | --- |
+| ซอร์สเฟิร์มแวร์ ESP32 | **ไม่มีใน repo** (ไม่มี `.ino`/`platformio.ini`/C/C++/binary/upload script ใด ๆ) | `git ls-files` |
+| payload Serial ที่ส่งจริง | **ยืนยันแล้ว**: ASCII 6 บิต `0/1` + LF เช่น `b"101010\n"` | `app.py` `f"{pattern}\n".encode(...)` |
+| baud / ตัวคั่น | **ยืนยันแล้ว**: 115200 บอด, 8N1, ตัวคั่น LF | `app.DEFAULT_BAUD`, `serial.Serial(..., timeout=1)` |
+| การอ่าน Serial / การแยก ACK | **ไม่มี** — ไม่มี `.read()`/`.readline()` ที่ใดเลย | ตรวจซอร์สทั้งหมด |
+| `000000` = คำสั่งดับทุกจุด | **สันนิษฐาน แต่ยังไม่ยืนยัน** ว่าเฟิร์มแวร์ปลดพลังงานทุกจุดอย่างปลอดภัย | ปุ่ม All OFF เดิมส่ง `000000` เท่านั้น |
+| lock กันการเขียน Serial ซ้อน | **เพิ่มใน Step 6** (`serial_write_lock` ใช้ร่วมกับ `/send` เดิม) | `app.py` |
+| actuator ค้างพลังงานเมื่อ browser แครช | **เป็นไปได้** — ก่อน Step 6 ไม่มีการล้างเมื่อหลุด/แครช | — |
+| watchdog เฟิร์มแวร์ / host | **host watchdog เพิ่มใน Step 6**; **เฟิร์มแวร์ยังไม่มี** (blocker สำหรับใช้งานแบบไม่มีคนดูแล) | — |
+| การจับคู่จุด ↔ GPIO | **ไม่ทราบ** (ไม่มีเฟิร์มแวร์) — ห้ามสมมติ | — |
+
+> เนื่องจากความปลอดภัยของการ "ค้างเซลล์" (ความร้อนของ actuator / ไดรเวอร์ L298N)
+> และพฤติกรรมการล้างเซลล์ **ยังยืนยันไม่ได้จาก repo** การเล่นไปยังฮาร์ดแวร์จริง
+> จึง **ปิดอยู่โดยค่าเริ่มต้น** — mock transport, เซสชันแบบมีการ์ด, host watchdog,
+> UI opt-in และโหมดตรวจสอบจุดด้วยมือ ถูก implement ครบ แต่ transport production
+> จะ `is_available() == False` จนกว่าจะตั้ง env สองตัว:
+>
+> ```bash
+> export BRAILLE_HARDWARE_ENABLED=1
+> export BRAILLE_HARDWARE_SAFETY_CONFIRMED=1   # ตั้งได้ก็ต่อเมื่อผ่านเช็กลิสต์ฮาร์ดแวร์แบบมีผู้ดูแลแล้ว
+> ```
+>
+> เดโม/เทสต์ในเบราว์เซอร์โดยไม่มีฮาร์ดแวร์: `export BRAILLE_HARDWARE_MOCK=1`
+
+### สถาปัตยกรรม
+
+- **`braille_hardware.py`** — ชั้น transport (แยกจาก playback/OCR/Liblouis/Flask
+  โดยสิ้นเชิง): `BrailleHardwareTransport` (ABC: `is_available`, `display_pattern`,
+  `clear`, `close`/`disconnect`) พร้อม 3 implementation —
+  `SerialBrailleHardwareTransport` (ใช้ซ้ำ `ser_conn` เดิม + `serial_write_lock`
+  เดียวกับ `/send` ไม่มี `serial.Serial` ซ้ำซ้อน), `MockBrailleHardwareTransport`
+  (deterministic บันทึกทุก payload ไบต์), `UnavailableBrailleHardwareTransport`
+  (raise error มีโครงสร้าง) — `CLEAR_PATTERN = "000000"`, `validate_pattern` รับ
+  เฉพาะ `^[01]{6}$`, `encode_pattern` = ASCII 6 บิต + LF (ไม่รับข้อความ OCR /
+  Unicode Braille)
+- **`braille_hardware_session.py`** — `HardwarePlaybackSessionManager`: เซสชันเดียว
+  ต่อครั้ง, `session_id` + `generation` ต้องตรงทุกคำขอ, เริ่มต้อง `clear()` ก่อน,
+  แยก "ช่องว่างชั่วคราว" (ไม่เพิ่ม real-cell index) จาก "เซลล์ว่างจริง" (เพิ่ม
+  index), host watchdog หนึ่งตัวต่อเซสชัน (`threading.Timer` inject ได้ในเทสต์),
+  stop = ยกเลิกเซสชัน **ก่อน** แล้ว best-effort `clear()` ครั้งเดียว
+- **`static/braille_hardware.js`** — `BrailleHardwareBridge` (ไม่รู้จัก DOM):
+  `onCell → sendCell(bit_pattern, index)`, `onTransientBlank → sendTransientGap()`
+  ส่ง `"000000"`, `onStop/onComplete/onError/pause → handlePlaybackEnded()`,
+  ทิ้ง callback ล้าสมัย, โหมด **ปิดเสมอตอนสร้าง instance**
+- **Flask routes** (ไม่แตะ `ser_conn` ตรง ๆ ไม่ log เนื้อหาเอกสาร):
+  `GET /api/hardware/status`, `GET /api/hardware/ports`,
+  `POST /api/hardware/playback/{start,cell,stop}`, `POST /api/hardware/verify/cell`
+
+### ความหมายของ "สำเร็จ" — สี่ระดับ (สำคัญ)
+
+เฟิร์มแวร์ **ไม่มี ACK ที่ยืนยันได้** ระบบจึงแยก:
+
+| ระดับ | ความหมาย | ค่าใน Step 6 |
+| --- | --- | --- |
+| `accepted_by_server` | เซิร์ฟเวอร์รับคำขอ + ผ่าน validation | `true` เมื่อผ่าน |
+| `written_to_serial` | เขียนไบต์ลง OS buffer + `flush()` แล้ว | `true` เมื่อเขียนได้ |
+| `acknowledged_by_device` | อุปกรณ์ตอบรับ | **`null` (unknown) เสมอ** |
+| `physically_displayed` | เซลล์ถูกยกจุดจริงบนฮาร์ดแวร์ | **`null` (unknown) เสมอ** |
+
+UI แสดง **"ส่งคำสั่งผ่าน Serial แล้ว แต่ยังไม่ได้รับการยืนยันจากอุปกรณ์"** เท่านั้น
+ไม่มีจุดใดแสดง "ESP32 แสดงผลสำเร็จ" หลัง `write()`/`flush()`
+
+### host watchdog และข้อจำกัด
+
+ทุกคำขอเซลล์ที่ถูกต้อง refresh เส้นตายสั้น ๆ (ค่าเริ่มต้น 4 วินาที, clamp 1–30)
+เมื่อเลยเส้นตาย: ยกเลิกเซสชัน → best-effort `clear()` → บันทึก safety event
+(**ไม่มีข้อความ OCR**) — เวลาของ watchdog แยกจากเวลาการเล่นเซลล์, มี timer เดียว
+ต่อเซสชัน, เซสชันใหม่ทำให้ callback ของ watchdog เก่าเป็นโมฆะ, `atexit` ของ Flask
+ทำ best-effort clear, การ disconnect ทำ best-effort clear ก่อนปิดพอร์ต
+
+> **host watchdog ป้องกันไม่ได้** เมื่อคอมพิวเตอร์แครช สาย USB หลุด หรือไฟดับ —
+> **ยังจำเป็นต้องมี watchdog / timeout-clear ระดับเฟิร์มแวร์** สำหรับ actuator ที่
+> อาจร้อนเกิน หากเฟิร์มแวร์ไม่มี ถือเป็น **blocker** สำหรับการใช้งานแบบไม่มีคนดูแล
+
+### ขั้นตอน opt-in ฮาร์ดแวร์ (UI)
+
+การ์ด "โหมดฮาร์ดแวร์จริง" แยกจากการเล่นจำลอง — **ปิดทุกครั้งที่โหลดหน้า** ต้อง
+ติ๊ก checkbox ยืนยันเอง → เลือกพอร์ต (ระบบไม่เลือกให้ ไม่เดาว่าเป็น ESP32) →
+เชื่อมต่อ → กด "เริ่มเซสชันฮาร์ดแวร์" เอง → ปุ่ม "หยุดและล้างเซลล์" เด่นชัด กด
+ด้วยคีย์บอร์ดได้ตลอดเวลาที่เล่นอยู่ สถานะการเชื่อมต่อ/การส่ง/watchdog/หยุด ใช้
+`aria-live` ไม่พึ่งสีอย่างเดียว การเล่นจำลองยังทำงานได้อิสระ
+
+**นโยบาย "ฟังอีกครั้ง" / pause** (เลือกใช้แบบเดียว): การกด pause การเล่นจำลอง
+(รวมถึงตอนกด "ฟังข้อความอีกครั้ง") จะ **หยุดและล้างเซสชันฮาร์ดแวร์** เสมอ —
+ปลอดภัยกว่าการค้างเซลล์ไว้ระหว่างพัก ผู้ใช้เริ่มเซสชันใหม่เองได้หลังฟังจบ
+
+### พฤติกรรม lifecycle ของเบราว์เซอร์ (ไม่รับประกัน)
+
+`visibilitychange` (แท็บถูกซ่อน) → pause + หยุดเซสชัน; `pagehide` → best-effort
+หยุด; `beforeunload` → สัญญาณเสริมเท่านั้น — **host watchdog คือด่านหลักฝั่งโฮสต์**
+
+### กฎการเลือกพอร์ต
+
+`GET /api/hardware/ports` แสดง metadata จาก PySerial ตามจริง — **ไม่**สร้าง
+`COM3`/`COM4` ปลอม, **ไม่**ตั้งชื่อว่า ESP32, `/dev/cu.wlan-debug` และอุปกรณ์
+Bluetooth ถูกทำเครื่องหมาย `likely_unrelated`, ทุกพอร์ตแสดง **"อุปกรณ์ Serial ที่
+ยังไม่ได้ยืนยันชนิด"** จนกว่าจะยืนยันตัวตนได้จริง (ไม่มี handshake ปลอม) — ผู้ใช้
+ต้องเลือกเอง, รองรับ Windows เดิม, `/send` เดิมทำงานเข้ากันได้ย้อนหลัง
+
+### โหมดตรวจสอบลำดับจุดด้วยมือ
+
+`POST /api/hardware/verify/cell` รับเฉพาะ `100000, 010000, 001000, 000100,
+000010, 000001, 000000` — **ไม่มี `111111`** เริ่มด้วย clear, กดสั่งทีละรูปแบบ,
+watchdog จำกัดเวลาการจ่ายพลังงาน, บันทึกผลสังเกต (pattern / จุดที่คาดหวัง / จุด
+ที่เห็นจริง / pass·fail·unknown) **ในหน้าเว็บเท่านั้น ไม่ commit เข้า Git** —
+ตรวจได้แค่ **ลำดับจุดเชิงตรรกะ 1–6** ไม่ใช่หมายเลขขา GPIO ของ ESP32
+
+### เช็กลิสต์การทดสอบฮาร์ดแวร์แบบมีผู้ดูแล (ห้ามรันอัตโนมัติ)
+
+1. ถอดไฟเลี้ยง actuator ออกก่อน
+2. เสียบ USB แล้วเลือกพอร์ต Serial ที่ยืนยันแล้ว
+3. ยืนยัน baud (115200) และคำสั่งล้าง (`000000` + LF)
+4. จ่ายไฟ actuator โดยมีผู้ดูแล
+5. ส่ง `000000` เป็นอย่างแรก
+6. ทดสอบทีละจุด ด้วยเวลากดสั้น ๆ
+7. ยืนยันจุดเชิงตรรกะ 1–6
+8. ทดสอบปุ่มหยุด และการล้างโดย watchdog
+9. ถอด USB ระหว่างการทดสอบที่ปลอดภัย สังเกตพฤติกรรมเฟิร์มแวร์ (ล้างเองหรือไม่)
+10. ทดสอบลำดับที่แปลแล้วสั้น ๆ หนึ่งชุด
+11. บันทึกว่ามี ACK ตอบกลับหรือไม่
+12. หยุดทันทีหากฮาร์ดแวร์ร้อน สั่นผิดปกติ หรือไม่ล้างเซลล์
+
+### คำถามที่ยังค้างสำหรับทีมฮาร์ดแวร์
+
+- เฟิร์มแวร์ตีความ `000000` เป็น "ปลดพลังงานทุกจุด" จริงหรือไม่ และค้างสถานะนั้น
+  ได้นานเท่าใดอย่างปลอดภัย
+- การค้างเซลล์ที่มีจุดเปิด (เช่น `101010`) ค้างได้กี่วินาทีก่อน actuator/L298N
+  ร้อนเกิน — ต้องมี duty-cycle หรือไม่
+- เฟิร์มแวร์มี watchdog / auto-clear timeout หรือไม่ ถ้ามี กี่มิลลิวินาที
+- เฟิร์มแวร์ส่งสตริง ACK ใด ๆ กลับหรือไม่ (รูปแบบ, เงื่อนไข)
+- การจับคู่จุดเบรลล์ 1–6 กับขา GPIO ของ ESP32 และช่องของ L298N
+- พฤติกรรมเมื่อ USB หลุดกลางคัน — เฟิร์มแวร์ล้างเซลล์เองหรือค้าง
+- เวอร์ชันเฟิร์มแวร์ปัจจุบันบนบอร์ดต้นแบบ และมีซอร์สที่ใด
+
+รายละเอียดโปรโตคอลระดับไบต์: ดู [`PROTOCOL.md`](PROTOCOL.md)
+
 ## ทดสอบ
 
-ชุดทดสอบใช้ Reader จำลอง จึงไม่ดาวน์โหลดโมเดล ไม่ใช้ GPU ไม่ใช้อินเทอร์เน็ต และไม่ทำ OCR จริง:
+ชุดทดสอบใช้ Reader จำลอง จึงไม่ดาวน์โหลดโมเดล ไม่ใช้ GPU ไม่ใช้อินเทอร์เน็ต และไม่ทำ OCR จริง
+ชุดทดสอบฮาร์ดแวร์ (Step 6) ใช้ mock transport + fake timer ทั้งหมด **ไม่เปิดพอร์ต
+Serial จริง** และไม่มีการเรียก `/api/hardware/*` อัตโนมัติตอนโหลดหน้า:
 
 ```bash
 source .venv/bin/activate
 python -m unittest discover -s tests -v
 node --check static/script.js
 node --check static/braille_playback.js
+node --check static/braille_hardware.js
 node --test "tests/js/**/*.test.js"
-python -m compileall -q app.py ocr_service.py image_preprocessing.py ocr_evaluation.py evaluate_ocr.py synthetic_dataset.py generate_synthetic_ocr.py braille_models.py braille_translation.py liblouis_translator.py legacy_braille_dictionary.py tests
+python -m compileall -q app.py ocr_service.py image_preprocessing.py ocr_evaluation.py evaluate_ocr.py synthetic_dataset.py generate_synthetic_ocr.py braille_models.py braille_translation.py liblouis_translator.py legacy_braille_dictionary.py braille_hardware.py braille_hardware_session.py tests
 git diff --check
 ```
 

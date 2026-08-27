@@ -58,6 +58,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const brailleGapInput = document.getElementById('brailleGapInput');
     const brailleLinePauseInput = document.getElementById('brailleLinePauseInput');
 
+    // Step 6: โหมดฮาร์ดแวร์จริง (ปิดอยู่เสมอตอนโหลดหน้า)
+    const hardwareModeToggle = document.getElementById('hardwareModeToggle');
+    const hardwareModeStatus = document.getElementById('hardwareModeStatus');
+    const hardwarePortSelect = document.getElementById('hardwarePortSelect');
+    const hardwareRefreshPortsBtn = document.getElementById('hardwareRefreshPortsBtn');
+    const hardwareConnectBtn = document.getElementById('hardwareConnectBtn');
+    const hardwareConnectionStatus = document.getElementById('hardwareConnectionStatus');
+    const hardwareStartBtn = document.getElementById('hardwareStartBtn');
+    const hardwareStopBtn = document.getElementById('hardwareStopBtn');
+    const hardwareSendStatus = document.getElementById('hardwareSendStatus');
+    const hardwareWatchdogStatus = document.getElementById('hardwareWatchdogStatus');
+    const hardwareVerifyPatternSelect = document.getElementById('hardwareVerifyPatternSelect');
+    const hardwareVerifyActivateBtn = document.getElementById('hardwareVerifyActivateBtn');
+    const hardwareVerifyClearBtn = document.getElementById('hardwareVerifyClearBtn');
+    const hardwareVerifyObservedInput = document.getElementById('hardwareVerifyObservedInput');
+    const hardwareVerifyOutcomeSelect = document.getElementById('hardwareVerifyOutcomeSelect');
+    const hardwareVerifyRecordBtn = document.getElementById('hardwareVerifyRecordBtn');
+    const hardwareVerifyLog = document.getElementById('hardwareVerifyLog');
+
     const speechSupported = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
     let recognizedText = '';
     let resultMayBeUnclear = false;
@@ -255,6 +274,50 @@ document.addEventListener('DOMContentLoaded', () => {
         onError: handleBraillePlaybackError,
     });
 
+    // ============================================================
+    // Step 6: สะพานเชื่อมการเล่นเข้ากับ Serial จริง (โหมดฮาร์ดแวร์)
+    // ============================================================
+    // hardwareBridge เป็น null ถ้าโหลด braille_hardware.js ไม่สำเร็จ - ทุกจุดที่
+    // เรียกใช้ต้องเช็ก null ก่อนเสมอ การเล่นแบบจำลองต้องทำงานได้โดยไม่ขึ้นกับสิ่งนี้
+    const hardwareBridge = (typeof BrailleHardwareBridge === 'function')
+        ? new BrailleHardwareBridge({
+            fetchFn: (url, opts) => fetch(url, opts),
+            onSendStatus: info => {
+                if (!hardwareSendStatus) return;
+                hardwareSendStatus.textContent = `สถานะการส่ง: ${info.message}` +
+                    (info.detail ? ` (${info.detail})` : '');
+            },
+            onConnectionStatus: info => {
+                if (!hardwareConnectionStatus) return;
+                hardwareConnectionStatus.textContent = `สถานะการเชื่อมต่อ: ${info.message}`;
+            },
+            onWatchdogStatus: info => {
+                if (!hardwareWatchdogStatus) return;
+                hardwareWatchdogStatus.textContent = `ความปลอดภัย: ${info.message}`;
+            },
+            onModeChange: enabled => {
+                if (hardwareModeStatus) {
+                    hardwareModeStatus.textContent = enabled
+                        ? 'สถานะ: โหมดฮาร์ดแวร์จริงเปิดอยู่ — อุปกรณ์อาจขยับหรือจ่ายพลังงาน'
+                        : 'สถานะ: โหมดฮาร์ดแวร์จริงปิดอยู่';
+                }
+                updateHardwareControlAvailability();
+            },
+            onSessionChange: () => updateHardwareControlAvailability(),
+        })
+        : null;
+
+    // เรียกแบบ fire-and-forget เสมอ - callback ของ playback เป็น sync ห้าม await
+    function notifyHardware(method, ...args) {
+        if (!hardwareBridge) return;
+        try {
+            const result = hardwareBridge[method](...args);
+            if (result && typeof result.catch === 'function') result.catch(() => {});
+        } catch (_err) {
+            /* โหมดฮาร์ดแวร์ต้องไม่ทำให้การเล่นจำลองพัง */
+        }
+    }
+
     // เรียงหมายเลขจุดแบบไทย เช่น [1,3,5] -> "1 3 และ 5" (จุดเดียวไม่มี "และ")
     function formatDotList(dotNumbers) {
         if (!dotNumbers || dotNumbers.length === 0) return '';
@@ -294,6 +357,11 @@ document.addEventListener('DOMContentLoaded', () => {
         braillePreviewModeLabel.hidden = false;
         updateVisualPreview(info.cell.bit_pattern);
 
+        // การเล่นจำลองอัปเดตในเครื่องเสมอ (บรรทัดข้างบน) - การส่งฮาร์ดแวร์เป็น
+        // ทางแยกที่เกิดเฉพาะเมื่อโหมดฮาร์ดแวร์เปิด + เซสชัน active เท่านั้น และ
+        // ต้องไม่แก้ไข index ของเซลล์ (ส่ง info.index ตรง ๆ เป็น real-cell index)
+        notifyHardware('sendCell', info.cell, info.index);
+
         const cellNumber = info.index + 1;
         const cellText = info.isBlank
             ? `เซลล์ ${cellNumber} จาก ${info.cellCount} เป็นช่องว่าง`
@@ -317,6 +385,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // เท่านั้น ไม่แตะข้อความเซลล์ปัจจุบันหรือประกาศเป็นเซลล์ใด ๆ
     function handleBraillePlaybackTransientBlank() {
         updateVisualPreview('000000');
+        // ช่องว่างชั่วคราวระหว่างเซลล์ + ช่วงหยุดขึ้นบรรทัดใหม่ - ส่ง "000000"
+        // แต่ไม่เพิ่ม real-cell index (ล้างเซลล์ระหว่างพัก ไม่ทิ้งจุดค้างพลังงาน)
+        notifyHardware('sendTransientGap');
     }
 
     function handleBraillePlaybackStateChange(state) {
@@ -325,11 +396,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (state === 'paused') {
             setBraillePlaybackAnnouncement('หยุดชั่วคราว');
+            notifyHardware('handlePlaybackEnded', 'หยุดการเล่นชั่วคราว');
         } else if (state === 'stopped') {
             setBraillePlaybackAnnouncement('หยุดเล่นและล้างจอแสดงผลจำลองแล้ว');
             braillePreviewModeLabel.hidden = true;
+            notifyHardware('handlePlaybackEnded', 'กดหยุดการเล่น');
         } else if (state === 'empty') {
             braillePreviewModeLabel.hidden = true;
+            notifyHardware('handlePlaybackEnded', 'ล้างลำดับการเล่น');
         }
     }
 
@@ -348,15 +422,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function handleBraillePlaybackComplete() {
         setBraillePlaybackAnnouncement('เล่นลำดับเบรลล์ครบแล้ว');
+        notifyHardware('handlePlaybackEnded', 'เล่นครบลำดับ');
     }
 
     function handleBraillePlaybackError(error) {
         setBraillePlaybackAnnouncement('เกิดข้อผิดพลาดขณะเตรียมลำดับอักษรเบรลล์สำหรับเล่น');
         addLog(`❌ Braille playback error: ${error.message}`, 'error');
+        notifyHardware('handlePlaybackEnded', 'เกิดข้อผิดพลาดในการเล่น');
     }
 
     function resetBraillePlayback() {
         braillePlayback.clear();
+        // OCR ใหม่ / แปลใหม่ / รีเซ็ต ทั้งหมดต้องจบเซสชันฮาร์ดแวร์อย่างปลอดภัย
+        notifyHardware('handlePlaybackEnded', 'เริ่มลำดับใหม่');
         braillePlaybackSection.hidden = true;
         braillePreviewModeLabel.hidden = true;
         brailleCurrentCellInfo.textContent = 'ยังไม่เริ่มเล่น';
@@ -392,6 +470,173 @@ document.addEventListener('DOMContentLoaded', () => {
     brailleCellDurationInput.addEventListener('change', applyBrailleTimingFromInputs);
     brailleGapInput.addEventListener('change', applyBrailleTimingFromInputs);
     brailleLinePauseInput.addEventListener('change', applyBrailleTimingFromInputs);
+
+    // ============================================================
+    // Step 6: การเดินสายปุ่มควบคุมโหมดฮาร์ดแวร์จริง
+    // ============================================================
+    // ปุ่มฮาร์ดแวร์ทั้งหมด disabled จนกว่าจะเปิด checkbox โหมดฮาร์ดแวร์อย่างชัดเจน
+    // ไม่มีการเรียก /api/hardware/* ใด ๆ ตอนโหลดหน้า (ไม่ auto-connect ไม่ auto-start)
+    const hardwareVerifyRecords = [];
+
+    function hardwareControlsPresent() {
+        return hardwareBridge && hardwareModeToggle && hardwareStartBtn && hardwareStopBtn;
+    }
+
+    function setEnabled(el, enabled) {
+        if (!el) return;
+        el.disabled = !enabled;
+        el.setAttribute('aria-disabled', String(!enabled));
+    }
+
+    function updateHardwareControlAvailability() {
+        if (!hardwareControlsPresent()) return;
+        const modeOn = hardwareBridge.isHardwareModeEnabled();
+        const connected = hardwareBridge.isPortConnected();
+        const sessionActive = hardwareBridge.isSessionActive();
+
+        setEnabled(hardwarePortSelect, modeOn && !sessionActive);
+        setEnabled(hardwareRefreshPortsBtn, modeOn);
+        setEnabled(hardwareConnectBtn, modeOn && !sessionActive);
+        setEnabled(hardwareStartBtn, modeOn && connected && !sessionActive);
+        // ปุ่มหยุดต้องกดได้ทุกครั้งที่มีเซสชัน และเข้าถึงด้วยคีย์บอร์ดได้เสมอ
+        setEnabled(hardwareStopBtn, sessionActive);
+        setEnabled(hardwareVerifyActivateBtn, modeOn && connected && sessionActive);
+        setEnabled(hardwareVerifyClearBtn, modeOn && connected && sessionActive);
+    }
+
+    async function refreshHardwarePorts() {
+        if (!hardwareBridge) return;
+        try {
+            const res = await fetch('/api/hardware/ports');
+            const data = await res.json().catch(() => null);
+            if (!data || !data.ok || !hardwarePortSelect) return;
+            hardwarePortSelect.innerHTML = '';
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = '— เลือกพอร์ต —';
+            hardwarePortSelect.appendChild(placeholder);
+            (data.ports || []).forEach(port => {
+                const opt = document.createElement('option');
+                opt.value = port.device;
+                // ไม่เดาชนิดอุปกรณ์ - แสดงป้ายกลาง ๆ เสมอ
+                opt.textContent = `${port.device} — ${port.identity_label}` +
+                    (port.likely_unrelated ? ' (น่าจะไม่เกี่ยวข้อง)' : '');
+                hardwarePortSelect.appendChild(opt);
+            });
+        } catch (_err) {
+            /* เงียบไว้ - ผู้ใช้กดรีเฟรชใหม่ได้ */
+        }
+    }
+
+    function initHardwareControls() {
+        if (!hardwareControlsPresent()) return;
+        // ค่าเริ่มต้น: ปิดทุกอย่าง (checkbox ไม่ติ๊ก)
+        hardwareModeToggle.checked = false;
+        updateHardwareControlAvailability();
+
+        hardwareModeToggle.addEventListener('change', async () => {
+            await hardwareBridge.setHardwareModeEnabled(hardwareModeToggle.checked);
+            if (hardwareModeToggle.checked) refreshHardwarePorts();
+        });
+
+        if (hardwareRefreshPortsBtn) {
+            hardwareRefreshPortsBtn.addEventListener('click', refreshHardwarePorts);
+        }
+
+        if (hardwareConnectBtn) {
+            hardwareConnectBtn.addEventListener('click', async () => {
+                const port = hardwarePortSelect ? hardwarePortSelect.value : '';
+                if (!port) {
+                    if (hardwareConnectionStatus) {
+                        hardwareConnectionStatus.textContent = 'สถานะการเชื่อมต่อ: กรุณาเลือกพอร์ตก่อน';
+                    }
+                    return;
+                }
+                // ใช้เส้นทาง /api/connect เดิมของแอปในการเปิดพอร์ต (ไม่สร้าง Serial ซ้ำ)
+                try {
+                    const res = await fetch('/api/connect', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ port }),
+                    });
+                    const data = await res.json().catch(() => null);
+                    hardwareBridge.setSelectedPort(port);
+                    hardwareBridge.setPortConnected(Boolean(data && data.success), port);
+                } catch (_err) {
+                    hardwareBridge.setPortConnected(false, port);
+                }
+                updateHardwareControlAvailability();
+            });
+        }
+
+        hardwareStartBtn.addEventListener('click', async () => {
+            const res = await hardwareBridge.startSession();
+            if (!res.ok && hardwareSendStatus) {
+                hardwareSendStatus.textContent = `สถานะการส่ง: เริ่มเซสชันไม่สำเร็จ (${res.message})`;
+            }
+            updateHardwareControlAvailability();
+        });
+
+        hardwareStopBtn.addEventListener('click', async () => {
+            // หยุดการเล่นจำลองด้วย เพื่อไม่ให้ timer ยิงเซลล์ใหม่หลังหยุดฮาร์ดแวร์
+            braillePlayback.pause();
+            await hardwareBridge.stopSession('กดปุ่มหยุดและล้างเซลล์');
+            updateHardwareControlAvailability();
+        });
+
+        if (hardwareVerifyActivateBtn) {
+            hardwareVerifyActivateBtn.addEventListener('click', () => {
+                const pattern = hardwareVerifyPatternSelect ? hardwareVerifyPatternSelect.value : '';
+                notifyHardware('verifyPattern', pattern);
+            });
+        }
+
+        if (hardwareVerifyClearBtn) {
+            hardwareVerifyClearBtn.addEventListener('click', () => {
+                notifyHardware('verifyPattern', '000000');
+            });
+        }
+
+        if (hardwareVerifyRecordBtn) {
+            hardwareVerifyRecordBtn.addEventListener('click', () => {
+                const record = {
+                    pattern: hardwareVerifyPatternSelect ? hardwareVerifyPatternSelect.value : '',
+                    expected_dot: hardwareVerifyPatternSelect
+                        ? hardwareVerifyPatternSelect.selectedOptions?.[0]?.textContent
+                        : '',
+                    observed_dot: hardwareVerifyObservedInput ? hardwareVerifyObservedInput.value : '',
+                    outcome: hardwareVerifyOutcomeSelect ? hardwareVerifyOutcomeSelect.value : 'unknown',
+                };
+                hardwareVerifyRecords.push(record);
+                if (hardwareVerifyLog) {
+                    const li = document.createElement('li');
+                    li.textContent = `รูปแบบ ${record.pattern} | คาดหวัง: ${record.expected_dot} | ` +
+                        `สังเกต: ${record.observed_dot || '—'} | ผล: ${record.outcome} ` +
+                        '(บันทึกในหน้านี้เท่านั้น ยืนยันเฉพาะลำดับจุดเชิงตรรกะ ไม่ใช่ขา GPIO)';
+                    hardwareVerifyLog.appendChild(li);
+                }
+            });
+        }
+    }
+
+    // อายุการใช้งานของเบราว์เซอร์ (Step 6 ข้อ 7) - จัดการแบบระมัดระวัง เอกสารระบุ
+    // ชัดว่า event เหล่านี้ "ไม่รับประกัน" ว่าจะยิง watchdog ฝั่งเซิร์ฟเวอร์เป็น
+    // ด่านหลัก
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden || document.visibilityState === 'hidden') {
+            braillePlayback.pause();
+            notifyHardware('stopSession', 'แท็บถูกซ่อน (visibilitychange)');
+        }
+    });
+    window.addEventListener('pagehide', () => {
+        notifyHardware('stopSession', 'ออกจากหน้า (pagehide)');
+    });
+    // beforeunload เป็นสัญญาณเสริม best-effort เท่านั้น ไม่ใช่กลไกความปลอดภัยหลัก
+    window.addEventListener('beforeunload', () => {
+        notifyHardware('stopSession', 'ปิดหน้า (beforeunload)');
+    });
+
+    initHardwareControls();
 
     // Initialize Page - เรียกหลังประกาศ braillePlayback แล้วเท่านั้น เพราะ
     // initOcrWorkflow() -> resetOcrResult() -> resetBrailleTranslation() ต้อง

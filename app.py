@@ -1,12 +1,28 @@
+import atexit
 import os
 import sys
 import logging
+import threading
 from io import BytesIO
 
 from flask import Flask, render_template, request, jsonify
 import serial
 import serial.tools.list_ports
 from werkzeug.exceptions import RequestEntityTooLarge
+
+from braille_hardware import (
+    CLEAR_PATTERN,
+    MANUAL_VERIFICATION_PATTERNS,
+    HardwareTransportError,
+    MockBrailleHardwareTransport,
+    SerialBrailleHardwareTransport,
+    UnavailableBrailleHardwareTransport,
+)
+from braille_hardware_session import (
+    DEFAULT_WATCHDOG_SECONDS,
+    HardwarePlaybackSessionManager,
+    HardwareSessionError,
+)
 
 from ocr_service import (
     EasyOCRService,
@@ -66,6 +82,107 @@ PORT_WEB = 5050
 # Global serial connection reference
 ser_conn = None
 active_port = DEFAULT_PORT
+
+# Lock เดียวสำหรับ serialize ทุกการเขียนพอร์ต Serial - ใช้ร่วมกันระหว่าง /send
+# เดิม และ hardware transport ของ Step 6 (ไม่มีการเขียนพอร์ตพร้อมกันสองเส้นทาง)
+serial_write_lock = threading.Lock()
+
+
+def _hardware_flag(name):
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _hardware_real_mode_enabled():
+    """โหมดฮาร์ดแวร์จริงเปิดได้เฉพาะเมื่อผู้ควบคุมตั้ง **ทั้งสอง** flag:
+
+      BRAILLE_HARDWARE_ENABLED=1          - ยอมให้เส้นทางฮาร์ดแวร์ทำงาน
+      BRAILLE_HARDWARE_SAFETY_CONFIRMED=1 - ยืนยันว่าผ่านการทดสอบฮาร์ดแวร์แบบ
+                                           มีผู้ดูแลแล้ว (โปรโตคอล + การล้างเซลล์
+                                           ปลอดภัย ดู README หัวข้อ Step 6)
+
+    ค่าเริ่มต้น = ปิด → ใช้ transport ที่ไม่พร้อมใช้งาน ไม่มีการแตะพอร์ตจริง
+    """
+    return _hardware_flag("BRAILLE_HARDWARE_ENABLED") and _hardware_flag(
+        "BRAILLE_HARDWARE_SAFETY_CONFIRMED"
+    )
+
+
+def _build_hardware_transport():
+    """เลือก transport ตามสภาพแวดล้อม - เรียกใหม่ได้เมื่อ flag เปลี่ยน (เทสต์)"""
+    if os.environ.get("BRAILLE_HARDWARE_MOCK", "").strip().lower() in ("1", "true", "yes", "on"):
+        return MockBrailleHardwareTransport(available=True)
+    if not _hardware_real_mode_enabled():
+        return UnavailableBrailleHardwareTransport()
+    return SerialBrailleHardwareTransport(
+        get_serial=lambda: ser_conn,
+        write_lock=serial_write_lock,
+        enabled_check=_hardware_real_mode_enabled,
+    )
+
+
+hardware_transport = _build_hardware_transport()
+hardware_session_manager = HardwarePlaybackSessionManager()
+
+
+@atexit.register
+def _shutdown_hardware_session():
+    # best-effort clear ตอน process ปิด (ทำเท่าที่ทำได้ - ป้องกัน crash/USB หลุด
+    # ไม่ได้ ต้องมี watchdog ระดับเฟิร์มแวร์เสริม)
+    try:
+        hardware_session_manager.shutdown()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+HARDWARE_ERROR_STATUS = {
+    "serial_not_connected": 409,
+    "unverified_port": 409,
+    "hardware_mode_disabled": 409,
+    "session_not_active": 409,
+    "stale_session": 409,
+    "invalid_pattern": 400,
+    "write_failed": 502,
+    "clear_failed": 502,
+    "watchdog_expired": 409,
+    "session_conflict": 409,
+    "hardware_ack_unavailable": 501,
+}
+
+
+def _hardware_error(code, message, status_code=None):
+    """error แบบมีโครงสร้างของเส้นทางฮาร์ดแวร์ - ไม่มี stack trace หรือ raw
+    device path หลุดไปถึง client
+    """
+    if status_code is None:
+        status_code = HARDWARE_ERROR_STATUS.get(code, 400)
+    return jsonify({
+        "ok": False,
+        "error": {"code": code, "message": message},
+        "ack_supported": False,
+        "acknowledged_by_device": None,
+        "physically_displayed": None,
+    }), status_code
+
+
+def list_hardware_ports():
+    """รายการพอร์ต Serial พร้อม metadata จาก PySerial - **ไม่** เดาชนิดอุปกรณ์
+
+    ไม่มีการสร้างพอร์ต COM3/COM4 ปลอม ไม่ตั้งชื่อว่า ESP32 พอร์ตที่ชื่อคล้าย
+    /dev/cu.wlan-debug ถูกทำเครื่องหมายว่าไม่เกี่ยวข้อง/ยังไม่ยืนยันชนิด
+    """
+    ports = []
+    for p in serial.tools.list_ports.comports():
+        device = p.device
+        ports.append({
+            "device": device,
+            "description": (p.description or None) if p.description != "n/a" else None,
+            "hwid": (p.hwid or None) if p.hwid != "n/a" else None,
+            "manufacturer": getattr(p, "manufacturer", None),
+            # ยังไม่มี handshake ยืนยันตัวตน → ป้ายกำกับกลาง ๆ เสมอ
+            "identity_label": "อุปกรณ์ Serial ที่ยังไม่ได้ยืนยันชนิด",
+            "likely_unrelated": "wlan-debug" in device or "Bluetooth" in device,
+        })
+    return ports
 
 SUPPORTED_IMAGE_MIME_TYPES = {
     "image/jpeg",
@@ -321,9 +438,12 @@ def send_pattern():
     payload = f"{pattern}\n".encode("utf-8")
 
     # Try sending payload with auto-reconnect logic if handle was broken due to cable unplug
+    # (serial_write_lock ทำให้การเขียนพอร์ตจาก /send และ hardware transport ของ
+    #  Step 6 ไม่ทับซ้อนกัน - พฤติกรรมภายนอกของ /send เดิมไม่เปลี่ยน)
     try:
-        ser_conn.write(payload)
-        ser_conn.flush()
+        with serial_write_lock:
+            ser_conn.write(payload)
+            ser_conn.flush()
         logging.info(f"Sent to ESP32 ({active_port}): {pattern}")
         return jsonify({
             "success": True,
@@ -344,8 +464,9 @@ def send_pattern():
         reconnect_success, msg = init_serial(active_port)
         if reconnect_success:
             try:
-                ser_conn.write(payload)
-                ser_conn.flush()
+                with serial_write_lock:
+                    ser_conn.write(payload)
+                    ser_conn.flush()
                 logging.info(f"Retry sent to ESP32 ({active_port}): {pattern}")
                 return jsonify({
                     "success": True,
@@ -402,6 +523,145 @@ def translate_braille():
     response = translation_response_dict(translation, sent_to_hardware=False)
     response["ok"] = True
     return jsonify(response)
+
+
+# ============================================================================
+# Step 6: เส้นทางฮาร์ดแวร์แบบมีการ์ด (guarded hardware playback)
+# ----------------------------------------------------------------------------
+# ทุกเส้นทางนี้ทำงานผ่าน hardware_transport + hardware_session_manager เท่านั้น
+# ไม่แตะ ser_conn โดยตรง ไม่รับข้อความ OCR ไม่ log เนื้อหาเอกสาร ค่าเริ่มต้นของ
+# transport คือ "ไม่พร้อมใช้งาน" จนกว่าจะตั้ง env flag ความปลอดภัยครบ
+# ============================================================================
+
+
+def _hardware_status_payload():
+    status = hardware_session_manager.status()
+    status["ok"] = True
+    status["real_mode_enabled"] = _hardware_real_mode_enabled()
+    # รายงาน transport ระดับโมดูลเสมอ (แม้ยังไม่มีเซสชัน) เพื่อให้ UI รู้ว่า
+    # เส้นทางฮาร์ดแวร์พร้อมหรือไม่ก่อนกดเริ่มเซสชัน
+    status["transport_kind"] = getattr(hardware_transport, "kind", None)
+    status["transport_available"] = bool(hardware_transport.is_available())
+    status["clear_pattern"] = CLEAR_PATTERN
+    status["serial_payload_example"] = "b'101010\\n' (ASCII 6 บิต + LF, 115200 baud)"
+    status["ack_note"] = (
+        "เฟิร์มแวร์ปัจจุบันไม่มี ACK ที่ยืนยันได้ - 'written_to_serial' ไม่ได้แปลว่า "
+        "'ESP32 แสดงผลสำเร็จ'"
+    )
+    return status
+
+
+@app.route("/api/hardware/status", methods=["GET"])
+def hardware_status():
+    return jsonify(_hardware_status_payload())
+
+
+@app.route("/api/hardware/ports", methods=["GET"])
+def hardware_ports():
+    return jsonify({
+        "ok": True,
+        "ports": list_hardware_ports(),
+        "note": "ต้องเลือกพอร์ตเอง ระบบไม่เลือกอัตโนมัติและไม่เดาว่าพอร์ตใดเป็น ESP32",
+    })
+
+
+@app.route("/api/hardware/playback/start", methods=["POST"])
+def hardware_playback_start():
+    data = request.get_json(silent=True) or {}
+    if not _hardware_real_mode_enabled() and not isinstance(
+        hardware_transport, MockBrailleHardwareTransport
+    ):
+        return _hardware_error(
+            "hardware_mode_disabled",
+            "โหมดฮาร์ดแวร์จริงยังไม่เปิดใช้งานบนเซิร์ฟเวอร์นี้ (ต้องตั้ง BRAILLE_HARDWARE_ENABLED "
+            "และ BRAILLE_HARDWARE_SAFETY_CONFIRMED หลังผ่านการทดสอบฮาร์ดแวร์แบบมีผู้ดูแล)",
+        )
+    if not data.get("hardware_playback_opt_in") is True:
+        return _hardware_error(
+            "hardware_mode_disabled",
+            "ต้องยืนยันการเปิดโหมดฮาร์ดแวร์จริงอย่างชัดเจน (hardware_playback_opt_in=true)",
+        )
+    watchdog_seconds = data.get("watchdog_seconds", DEFAULT_WATCHDOG_SECONDS)
+    try:
+        result = hardware_session_manager.start(
+            hardware_transport, watchdog_seconds=watchdog_seconds
+        )
+    except HardwareSessionError as exc:
+        return _hardware_error(exc.code, exc.message, exc.status_code)
+    result["ok"] = True
+    return jsonify(result)
+
+
+@app.route("/api/hardware/playback/cell", methods=["POST"])
+def hardware_playback_cell():
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id")
+    generation = data.get("generation")
+    pattern = data.get("bit_pattern") or data.get("pattern") or ""
+    transient_gap = bool(data.get("transient_gap"))
+    real_cell_index = data.get("real_cell_index")
+    if not isinstance(session_id, str) or not session_id:
+        return _hardware_error("session_not_active", "ต้องระบุ session_id ของเซสชันที่กำลังทำงานอยู่")
+    try:
+        result = hardware_session_manager.send_cell(
+            session_id,
+            generation,
+            pattern,
+            real_cell_index=real_cell_index,
+            transient_gap=transient_gap,
+        )
+    except HardwareSessionError as exc:
+        return _hardware_error(exc.code, exc.message, exc.status_code)
+    result["ok"] = True
+    result["message_for_ui"] = (
+        "ส่งคำสั่งผ่าน Serial แล้ว แต่ยังไม่ได้รับการยืนยันจากอุปกรณ์"
+    )
+    return jsonify(result)
+
+
+@app.route("/api/hardware/playback/stop", methods=["POST"])
+def hardware_playback_stop():
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id")
+    try:
+        result = hardware_session_manager.stop(session_id if isinstance(session_id, str) else None)
+    except HardwareSessionError as exc:
+        return _hardware_error(exc.code, exc.message, exc.status_code)
+    result["ok"] = True
+    return jsonify(result)
+
+
+@app.route("/api/hardware/verify/cell", methods=["POST"])
+def hardware_verify_cell():
+    """โหมดตรวจสอบลำดับจุดด้วยมือ - ทดสอบทีละรูปแบบ ไม่ใช่การเล่นอัตโนมัติ
+
+    ยอมรับเฉพาะรูปแบบใน MANUAL_VERIFICATION_PATTERNS (จุดเดียว + ล้าง) - **ไม่มี**
+    "111111" (all-on) ใช้กลไกเซสชัน + watchdog เดียวกันเพื่อจำกัดเวลาการจ่าย
+    พลังงาน ผู้ใช้ต้องกดสั่งแต่ละรูปแบบเอง
+    """
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id")
+    generation = data.get("generation")
+    pattern = data.get("bit_pattern") or data.get("pattern") or ""
+    if pattern not in MANUAL_VERIFICATION_PATTERNS:
+        return _hardware_error(
+            "invalid_pattern",
+            "โหมดตรวจสอบด้วยมือรับได้เฉพาะรูปแบบจุดเดียว (100000..000001) และรูปแบบล้าง (000000)",
+        )
+    if not isinstance(session_id, str) or not session_id:
+        return _hardware_error("session_not_active", "ต้องเริ่มเซสชันตรวจสอบก่อน (ใช้ /api/hardware/playback/start)")
+    try:
+        result = hardware_session_manager.send_cell(
+            session_id, generation, pattern, real_cell_index=0
+        )
+    except HardwareSessionError as exc:
+        return _hardware_error(exc.code, exc.message, exc.status_code)
+    result["ok"] = True
+    result["verification_note"] = (
+        "ตรวจสอบเฉพาะลำดับจุดเชิงตรรกะ (dot 1-6) เท่านั้น ไม่ได้ยืนยันหมายเลขขา GPIO ของ ESP32"
+    )
+    return jsonify(result)
+
 
 if __name__ == "__main__":
     print("=" * 60)

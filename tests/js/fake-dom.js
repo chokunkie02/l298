@@ -24,6 +24,14 @@ const ELEMENT_IDS = [
     'brailleCurrentCellInfo', 'braillePlaybackStatusText', 'braillePlayBtn',
     'braillePauseBtn', 'braillePreviousBtn', 'brailleNextBtn', 'brailleRestartBtn',
     'brailleStopBtn', 'brailleCellDurationInput', 'brailleGapInput', 'brailleLinePauseInput',
+    // Step 6: โหมดฮาร์ดแวร์จริง
+    'hardwarePlaybackSection', 'hardwareModeToggle', 'hardwareModeStatus',
+    'hardwarePortSelect', 'hardwareRefreshPortsBtn', 'hardwareConnectBtn',
+    'hardwareConnectionStatus', 'hardwarePortIdentityNote', 'hardwareStartBtn',
+    'hardwareStopBtn', 'hardwareSendStatus', 'hardwareWatchdogStatus',
+    'hardwareVerifySection', 'hardwareVerifyPatternSelect', 'hardwareVerifyActivateBtn',
+    'hardwareVerifyClearBtn', 'hardwareVerifyObservedInput', 'hardwareVerifyOutcomeSelect',
+    'hardwareVerifyRecordBtn', 'hardwareVerifyLog',
 ];
 
 class FakeClassList {
@@ -171,6 +179,8 @@ function createEnv(options = {}) {
     const documentListeners = {};
     const fakeDocument = {
         activeElement: null,
+        hidden: false,
+        visibilityState: 'visible',
         getElementById: id => elements[id] || null,
         querySelectorAll: () => [],
         createElement: tag => new FakeElement(null, tag),
@@ -184,11 +194,31 @@ function createEnv(options = {}) {
 
     let ocrResponseQueue = [];
     let brailleResponseQueue = [];
+    const hardwareResponseQueues = {};
     const fetchCalls = [];
+    function hardwareResponse(url) {
+        const q = hardwareResponseQueues[url] || [];
+        const next = q.shift();
+        if (!next) {
+            // ค่าเริ่มต้นที่ปลอดภัย: ตอบ ok เปล่า ๆ (เทสต์ที่สนใจต้อง queue เอง)
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) });
+        }
+        if (next.reject) return Promise.reject(next.reject);
+        return Promise.resolve({
+            ok: next.ok !== false,
+            json: () => Promise.resolve(next.body),
+        });
+    }
     function fetchMock(url, opts) {
         fetchCalls.push({ url, opts });
         if (url === '/api/status') {
             return Promise.resolve(defaultStatusResponse());
+        }
+        if (typeof url === 'string' && url.startsWith('/api/hardware/')) {
+            return hardwareResponse(url);
+        }
+        if (url === '/api/connect') {
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, active_port: 'mock', message: 'ok' }) });
         }
         if (url === '/api/ocr') {
             const next = ocrResponseQueue.shift();
@@ -254,6 +284,9 @@ function createEnv(options = {}) {
     const playbackScriptSource = fs.readFileSync(playbackScriptPath, 'utf-8');
     vm.runInContext(playbackScriptSource, context, { filename: 'braille_playback.js' });
 
+    const hardwareScriptPath = path.join(__dirname, '..', '..', 'static', 'braille_hardware.js');
+    vm.runInContext(fs.readFileSync(hardwareScriptPath, 'utf-8'), context, { filename: 'braille_hardware.js' });
+
     const scriptPath = path.join(__dirname, '..', '..', 'static', 'script.js');
     const scriptSource = fs.readFileSync(scriptPath, 'utf-8');
     vm.runInContext(scriptSource, context, { filename: 'script.js' });
@@ -265,6 +298,19 @@ function createEnv(options = {}) {
         elements,
         speechSynthesis,
         fetchCalls,
+        document: fakeDocument,
+        queueHardwareResponse(url, body, opts = {}) {
+            (hardwareResponseQueues[url] = hardwareResponseQueues[url] || []).push({ body, ...opts });
+        },
+        hardwareCalls() {
+            return fetchCalls.filter(c => typeof c.url === 'string' && c.url.startsWith('/api/hardware/'));
+        },
+        dispatchWindow(type, evt) {
+            (windowListeners[type] || []).slice().forEach(cb => cb(evt || {}));
+        },
+        dispatchDocument(type) {
+            fakeDocument.dispatch(type);
+        },
         // จำลองเวลาผ่านไปสำหรับ static/braille_playback.js - ยิง timer ที่ค้าง
         // อยู่ทั้งหมด ณ ตอนนี้ (ปกติมีแค่ 1 ตัวตามสเปก Step 5)
         fireAllTimers() {
