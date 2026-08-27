@@ -105,8 +105,8 @@
          */
         constructor(options) {
             const opts = options || {};
-            this._setTimeout = opts.setTimeoutFn || (typeof setTimeout !== 'undefined' ? setTimeout : null);
-            this._clearTimeout = opts.clearTimeoutFn || (typeof clearTimeout !== 'undefined' ? clearTimeout : null);
+            this._setTimeout = opts.setTimeoutFn || ((fn, ms) => setTimeout(fn, ms));
+            this._clearTimeout = opts.clearTimeoutFn || ((id) => clearTimeout(id));
             this._onCellDisplay = opts.onCellDisplay || noop;
             this._onTransientBlank = opts.onTransientBlank || noop;
             this._onStateChange = opts.onStateChange || noop;

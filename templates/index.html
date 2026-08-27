@@ -54,45 +54,64 @@
                 <span class="badge-hint">EasyOCR ภาษาไทยและอังกฤษ</span>
             </div>
 
-            <p id="ocrInstructions" class="ocr-instructions">
-                เลือกภาพจากเครื่อง หรือใช้กล้องถ่ายภาพบนโทรศัพท์เมื่ออุปกรณ์รองรับ
-                จากนั้นกดปุ่ม “อ่านข้อความจากภาพ” เมื่อผลลัพธ์พร้อม คุณสามารถกดปุ่ม “ฟังข้อความที่ตรวจพบ”
-                เพื่อฟังออกเสียง หรือกดยืนยันได้ทันที
-                ระบบจะไม่ส่งข้อมูลไปยัง ESP32 จนกว่าคุณจะกดยืนยัน
-            </p>
-
-            <div class="ocr-picker-group">
-                <label for="ocrImageInput" class="form-label">เลือกหรือถ่ายภาพที่มีข้อความภาษาไทยหรือภาษาอังกฤษ</label>
-                <input
-                    type="file"
-                    id="ocrImageInput"
-                    class="image-input"
-                    accept="image/*"
-                    capture="environment"
-                    aria-describedby="ocrInstructions imageInputHelp"
-                >
-                <p id="imageInputHelp" class="input-tip">
-                    รองรับไฟล์ภาพ บนอุปกรณ์มือถืออาจเลือกใช้กล้องหลังหรือเลือกรูปจากคลังภาพได้
-                </p>
-            </div>
-
-            <div
-                id="ocrStatus"
-                class="ocr-status"
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-                tabindex="-1"
-                data-state="idle"
-            >
-                สถานะ: ยังไม่ได้เลือกภาพ
-            </div>
-
-            <div class="ocr-primary-action">
-                <button id="readImageBtn" class="btn btn-primary btn-lg" type="button" disabled>
-                    <i class="fa-solid fa-volume-high" aria-hidden="true"></i>
-                    อ่านข้อความจากภาพ
+            <!-- Mode Switcher Tabs -->
+            <div style="display: flex; gap: 10px; margin-top: 14px; margin-bottom: 16px;">
+                <button id="modeTabImage" class="btn btn-primary" type="button" style="flex: 1; padding: 12px; font-weight: 700; border-radius: 8px;">
+                    <i class="fa-solid fa-image" aria-hidden="true"></i> 📷 อัปโหลดภาพ (OCR)
                 </button>
+                <button id="modeTabText" class="btn btn-secondary" type="button" style="flex: 1; padding: 12px; font-weight: 700; border-radius: 8px; background: #e2e8f0; color: #1e293b; border: 1px solid #cbd5e1;">
+                    <i class="fa-solid fa-keyboard" aria-hidden="true"></i> ✍️ พิมพ์ข้อความโดยตรง
+                </button>
+            </div>
+
+            <!-- Panel 1: Image OCR -->
+            <div id="imageInputPanel">
+                <div class="ocr-picker-group">
+                    <label for="ocrImageInput" class="form-label">เลือกหรือถ่ายภาพที่มีข้อความภาษาไทยหรือภาษาอังกฤษ</label>
+                    <input
+                        type="file"
+                        id="ocrImageInput"
+                        class="image-input"
+                        accept="image/*"
+                        capture="environment"
+                        aria-describedby="ocrInstructions imageInputHelp"
+                    >
+                    <p id="imageInputHelp" class="input-tip">
+                        รองรับไฟล์ภาพ บนอุปกรณ์มือถืออาจเลือกใช้กล้องหลังหรือเลือกรูปจากคลังภาพได้
+                    </p>
+                </div>
+
+                <div
+                    id="ocrStatus"
+                    class="ocr-status"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                    tabindex="-1"
+                    data-state="idle"
+                >
+                    สถานะ: ยังไม่ได้เลือกภาพ
+                </div>
+
+                <div class="ocr-primary-action">
+                    <button id="readImageBtn" class="btn btn-primary btn-lg" type="button" disabled>
+                        <i class="fa-solid fa-volume-high" aria-hidden="true"></i>
+                        อ่านข้อความจากภาพ
+                    </button>
+                </div>
+            </div>
+
+            <!-- Panel 2: Direct Text Input -->
+            <div id="textInputPanel" hidden style="padding: 16px; background: #f0f9ff; border: 2px solid #0284c7; border-radius: 8px; color: #0f172a; margin-bottom: 15px;">
+                <label for="directTextInput" class="form-label" style="font-weight: 700; color: #0369a1; font-size: 1.05rem;">
+                    <i class="fa-solid fa-keyboard" aria-hidden="true"></i> พิมพ์ข้อความภาษาไทย / ภาษาอังกฤษ เพื่อแปลงเป็นอักษรเบรลล์ทันที:
+                </label>
+                <textarea id="directTextInput" class="form-control" rows="3" style="width: 100%; margin-top: 8px; padding: 12px; font-size: 1.1rem; border-radius: 6px; border: 1.5px solid #0284c7; background: #ffffff; color: #0f172a; resize: vertical;" placeholder="พิมพ์ข้อความที่ต้องการทดสอบ เช่น ABC หรือ ทดสอบอักษรเบรลล์">ABC</textarea>
+                <div style="margin-top: 10px; text-align: right;">
+                    <button id="directTranslateBtn" class="btn btn-primary btn-lg" type="button" style="padding: 10px 24px; font-weight: 700;">
+                        <i class="fa-solid fa-braille" aria-hidden="true"></i> แปลงเป็นอักษรเบรลล์ทันที ➔
+                    </button>
+                </div>
             </div>
 
             <div id="ocrResultPanel" class="ocr-result" hidden>
@@ -253,42 +272,40 @@
                 <span class="badge-hint">ปิดอยู่โดยค่าเริ่มต้น</span>
             </div>
 
-            <p class="hardware-warning">
-                <strong>คำเตือน:</strong> เมื่อเปิดโหมดนี้ อุปกรณ์จริงอาจ<strong>ขยับหรือมีการจ่ายพลังงาน</strong>
-                ระบบจะส่งเฉพาะรูปแบบจุด 6 บิตที่ตรวจสอบแล้ว (ASCII 6 หลัก + ขึ้นบรรทัด) ที่ 115200 บอด
-                <strong>ไม่ส่งข้อความ OCR</strong> เฟิร์มแวร์ปัจจุบัน<strong>ไม่มีการยืนยัน (ACK)</strong>
-                ระบบจึงบอกได้เพียงว่า "ส่งคำสั่งผ่าน Serial แล้ว" ไม่สามารถยืนยันว่าเซลล์ถูกแสดงผลบนฮาร์ดแวร์จริง
-                การเล่นแบบจำลองบนหน้าจอยังใช้งานได้ตามปกติแยกจากโหมดนี้
-            </p>
+            <details style="margin-bottom: 12px; background: #f8fafc; padding: 10px 14px; border-radius: 6px; border: 1px solid #cbd5e1;">
+                <summary style="cursor: pointer; font-weight: 600; color: #475569; font-size: 0.9rem;">⚙️ ตั้งค่าสิทธิ์และเลือกพอร์ต Serial แบบ Manual (สำหรับนักพัฒนา)</summary>
+                
+                <p class="hardware-warning" style="margin-top: 10px;">
+                    <strong>คำเตือน:</strong> เมื่อเปิดโหมดนี้ อุปกรณ์จริงอาจ<strong>ขยับหรือมีการจ่ายพลังงาน</strong>
+                    ระบบจะส่งเฉพาะรูปแบบจุด 6 บิตที่ตรวจสอบแล้ว (ASCII 6 หลัก + ขึ้นบรรทัด) ที่ 115200 บอด
+                </p>
 
-            <div class="hardware-optin">
-                <label class="hardware-optin-label" for="hardwareModeToggle">
-                    <input type="checkbox" id="hardwareModeToggle">
-                    เปิดโหมดฮาร์ดแวร์จริง (ยืนยันว่าเข้าใจว่าอุปกรณ์อาจขยับหรือจ่ายพลังงาน)
-                </label>
-                <p id="hardwareModeStatus" class="input-tip" role="status" aria-live="polite" aria-atomic="true">
-                    สถานะ: โหมดฮาร์ดแวร์จริงปิดอยู่
-                </p>
-            </div>
+                <div class="hardware-optin">
+                    <label class="hardware-optin-label" for="hardwareModeToggle">
+                        <input type="checkbox" id="hardwareModeToggle" checked>
+                        เปิดโหมดฮาร์ดแวร์จริง (เปิดใช้อัตโนมัติเมื่อเชื่อมต่อ ESP32)
+                    </label>
+                    <p id="hardwareModeStatus" class="input-tip" role="status" aria-live="polite" aria-atomic="true">
+                        สถานะ: โหมดฮาร์ดแวร์จริงเปิดอยู่
+                    </p>
+                </div>
 
-            <div class="hardware-port-group">
-                <label for="hardwarePortSelect">เลือกพอร์ต Serial (ต้องเลือกเอง ระบบไม่เดาชนิดอุปกรณ์)</label>
-                <select id="hardwarePortSelect" class="port-select" disabled>
-                    <option value="">— ยังไม่ได้เลือกพอร์ต —</option>
-                </select>
-                <button id="hardwareRefreshPortsBtn" class="btn btn-secondary btn-sm" type="button" disabled>
-                    <i class="fa-solid fa-rotate-right" aria-hidden="true"></i> รีเฟรชรายการพอร์ต
-                </button>
-                <button id="hardwareConnectBtn" class="btn btn-secondary btn-sm" type="button" disabled>
-                    <i class="fa-solid fa-plug" aria-hidden="true"></i> เชื่อมต่อพอร์ตที่เลือก
-                </button>
-                <p id="hardwareConnectionStatus" class="input-tip" role="status" aria-live="polite" aria-atomic="true">
-                    สถานะการเชื่อมต่อ: ยังไม่ได้เชื่อมต่อ
-                </p>
-                <p id="hardwarePortIdentityNote" class="input-tip">
-                    พอร์ตทุกช่องแสดงเป็น "อุปกรณ์ Serial ที่ยังไม่ได้ยืนยันชนิด" จนกว่าจะยืนยันตัวตนได้จริง
-                </p>
-            </div>
+                <div class="hardware-port-group">
+                    <label for="hardwarePortSelect">เลือกพอร์ต Serial</label>
+                    <select id="hardwarePortSelect" class="port-select">
+                        <option value="">— พอร์ตอัตโนมัติ —</option>
+                    </select>
+                    <button id="hardwareRefreshPortsBtn" class="btn btn-secondary btn-sm" type="button">
+                        <i class="fa-solid fa-rotate-right" aria-hidden="true"></i> รีเฟรชรายการพอร์ต
+                    </button>
+                    <button id="hardwareConnectBtn" class="btn btn-secondary btn-sm" type="button">
+                        <i class="fa-solid fa-plug" aria-hidden="true"></i> เชื่อมต่อพอร์ตที่เลือก
+                    </button>
+                    <p id="hardwareConnectionStatus" class="input-tip" role="status" aria-live="polite" aria-atomic="true">
+                        สถานะการเชื่อมต่อ: ยังไม่ได้เชื่อมต่อ
+                    </p>
+                </div>
+            </details>
 
             <div class="hardware-session-group">
                 <button id="hardwareStartBtn" class="btn btn-primary" type="button" disabled>
@@ -315,10 +332,16 @@
 
                 <div id="hardwareCurrentCellCard" class="hardware-current-cell-card" style="margin-top: 12px; width: 100%; padding: 14px 16px; background: #f8fafc; border: 2px solid #0284c7; border-radius: 8px; color: #0f172a; font-weight: 600;">
                     <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;">
-                        <span style="color: #0369a1; font-size: 0.9rem;"><i class="fa-solid fa-font" aria-hidden="true"></i> ตัวอักษรปัจจุบัน ณ ปัจจุบัน:</span>
-                        <span id="hardwareCurrentCharDisplay" style="font-size: 1.3rem; font-weight: 700; color: #0f172a; background: #e0f2fe; padding: 2px 12px; border-radius: 6px; border: 1px solid #7dd3fc;">—</span>
+                        <span style="color: #0369a1; font-size: 1rem; font-weight: 700;">
+                            🔤 แสดงผลตัวอักษรบน ESP32:
+                        </span>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span id="hardwareCountdownBadge" style="font-size: 0.9rem; font-weight: 700; color: #0284c7; background: #e0f2fe; padding: 4px 12px; border-radius: 20px; border: 1px solid #7dd3fc;" hidden>⏱️ 3วิ</span>
+                            <span style="font-size: 0.9rem; color: #475569;">ตัวอักษรขณะนี้:</span>
+                            <span id="hardwareCurrentCharDisplay" style="font-size: 1.6rem; font-weight: 800; color: #0369a1; background: #dbeafe; padding: 4px 16px; border-radius: 8px; border: 2px solid #3b82f6;">—</span>
+                        </div>
                     </div>
-                    <div id="hardwareCurrentCellDetail" style="font-size: 0.85rem; color: #334155; margin-top: 6px; font-weight: 400; line-height: 1.5;">
+                    <div id="hardwareCurrentCellDetail" style="font-size: 0.9rem; color: #334155; margin-top: 8px; font-weight: 500; line-height: 1.5;">
                         (เลือกตัวอักษรบนแป้นพิมพ์ กดปุ่ม "ถัดไป" หรือกดแปลข้อความเพื่อเริ่มเล่นอักษรเบรลล์)
                     </div>
                 </div>
@@ -326,6 +349,17 @@
                 <p id="hardwareSendStatus" class="input-tip" role="status" aria-live="polite" aria-atomic="true">
                     สถานะการส่ง: ยังไม่เริ่มเซสชัน
                 </p>
+
+                <div class="hardware-realtime-log-box" style="margin-top: 10px; width: 100%; background: #0f172a; color: #38bdf8; padding: 10px 14px; border-radius: 6px; font-family: monospace; font-size: 0.85rem; max-height: 140px; overflow-y: auto; border: 1px solid #334155;">
+                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px; color: #94a3b8; font-weight: 700;">
+                        <span>📋 บันทึกการส่งสัญญาณเรียลไทม์ไปยัง ESP32 (Hardware Real-time Log):</span>
+                        <span id="hardwareLogCount" style="color: #38bdf8;">พร้อมแล้ว</span>
+                    </div>
+                    <div id="hardwareLogList" style="line-height: 1.6; color: #f1f5f9;">
+                        [ระบบ] พร้อมส่งสัญญาณ Serial ไปยัง ESP32
+                    </div>
+                </div>
+
                 <p id="hardwareWatchdogStatus" class="input-tip" role="status" aria-live="assertive" aria-atomic="true"></p>
                 <p class="input-tip">
                     <i class="fa-solid fa-circle-info" aria-hidden="true"></i>

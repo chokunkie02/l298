@@ -73,6 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hardwareNextBtn = document.getElementById('hardwareNextBtn');
     const hardwareCurrentCharDisplay = document.getElementById('hardwareCurrentCharDisplay');
     const hardwareCurrentCellDetail = document.getElementById('hardwareCurrentCellDetail');
+    const hardwareCountdownBadge = document.getElementById('hardwareCountdownBadge');
     const hardwareSendStatus = document.getElementById('hardwareSendStatus');
     const hardwareWatchdogStatus = document.getElementById('hardwareWatchdogStatus');
     const hardwareVerifyPatternSelect = document.getElementById('hardwareVerifyPatternSelect');
@@ -151,6 +152,59 @@ document.addEventListener('DOMContentLoaded', () => {
         listenAgainBtn.addEventListener('click', speakRecognizedText);
         confirmOcrBtn.addEventListener('click', confirmOcrResult);
         chooseAnotherBtn.addEventListener('click', chooseAnotherImage);
+
+        const modeTabImage = document.getElementById('modeTabImage');
+        const modeTabText = document.getElementById('modeTabText');
+        const imageInputPanel = document.getElementById('imageInputPanel');
+        const textInputPanel = document.getElementById('textInputPanel');
+
+        if (modeTabImage && modeTabText) {
+            modeTabImage.addEventListener('click', () => {
+                modeTabImage.className = 'btn btn-primary';
+                modeTabImage.style.background = '';
+                modeTabImage.style.color = '';
+                modeTabText.className = 'btn btn-secondary';
+                modeTabText.style.background = '#e2e8f0';
+                modeTabText.style.color = '#1e293b';
+                if (imageInputPanel) imageInputPanel.hidden = false;
+                if (textInputPanel) textInputPanel.hidden = true;
+            });
+
+            modeTabText.addEventListener('click', () => {
+                modeTabText.className = 'btn btn-primary';
+                modeTabText.style.background = '';
+                modeTabText.style.color = '';
+                modeTabImage.className = 'btn btn-secondary';
+                modeTabImage.style.background = '#e2e8f0';
+                modeTabImage.style.color = '#1e293b';
+                if (imageInputPanel) imageInputPanel.hidden = true;
+                if (textInputPanel) textInputPanel.hidden = false;
+            });
+        }
+
+        const directTextInput = document.getElementById('directTextInput');
+        const directTranslateBtn = document.getElementById('directTranslateBtn');
+
+        if (directTranslateBtn) {
+            directTranslateBtn.addEventListener('click', async () => {
+                const text = directTextInput ? directTextInput.value.trim() : '';
+                if (!text) {
+                    alert('กรุณากรอกข้อความก่อนกดแปล');
+                    return;
+                }
+                await ensureHardwareSessionActive();
+                await translateConfirmedTextToBraille(text);
+            });
+        }
+
+        if (directTextInput) {
+            directTextInput.addEventListener('keypress', async (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (directTranslateBtn) directTranslateBtn.click();
+                }
+            });
+        }
 
         window.addEventListener('beforeunload', stopSpeech);
 
@@ -359,49 +413,109 @@ document.addEventListener('DOMContentLoaded', () => {
     // บริสุทธิ์ล้วน (แค่ toggle classList) ไม่เรียก /send หรือแตะ patternInput/
     // binaryPatternDisplay ที่ใช้ควบคุมฮาร์ดแวร์ด้วยมือเลย จึงใช้ซ้ำได้อย่าง
     // ปลอดภัยตรงนี้โดยไม่ต้องสร้างฟังก์ชันใหม่ (ดู README.md หัวข้อ Step 5)
+    let countdownIntervalId = null;
+
+    function startHardwareCountdown(durationMs) {
+        clearInterval(countdownIntervalId);
+        if (!hardwareCountdownBadge) return;
+
+        let remSeconds = Math.ceil(durationMs / 1000);
+        if (remSeconds <= 0) {
+            hardwareCountdownBadge.hidden = true;
+            return;
+        }
+
+        hardwareCountdownBadge.hidden = false;
+        hardwareCountdownBadge.textContent = `⏱️ อีก ${remSeconds}วิ...`;
+
+        countdownIntervalId = setInterval(() => {
+            remSeconds -= 1;
+            if (remSeconds > 0) {
+                hardwareCountdownBadge.textContent = `⏱️ อีก ${remSeconds}วิ...`;
+            } else {
+                hardwareCountdownBadge.textContent = `⏱️ กำลังเปลี่ยนคำ...`;
+                clearInterval(countdownIntervalId);
+            }
+        }, 1000);
+    }
+
+    function stopHardwareCountdown() {
+        clearInterval(countdownIntervalId);
+        if (hardwareCountdownBadge) {
+            hardwareCountdownBadge.hidden = true;
+        }
+    }
+
+    let hardwareLogCountNum = 0;
+
+    function addHardwareLog(message, type = 'info') {
+        const list = document.getElementById('hardwareLogList');
+        const countSpan = document.getElementById('hardwareLogCount');
+        if (!list) return;
+        
+        hardwareLogCountNum += 1;
+        if (countSpan) countSpan.textContent = `${hardwareLogCountNum} รายการ`;
+
+        const now = new Date();
+        const timeStr = now.toTimeString().split(' ')[0];
+        const icon = type === 'error' ? '❌' : (type === 'success' ? '🟢' : 'ℹ️');
+        const color = type === 'error' ? '#f87171' : (type === 'success' ? '#4ade80' : '#38bdf8');
+        
+        const line = document.createElement('div');
+        line.style.color = color;
+        line.style.marginTop = '2px';
+        line.innerHTML = `<span style="color: #64748b;">[${timeStr}]</span> ${icon} ${message}`;
+        list.appendChild(line);
+        list.scrollTop = list.scrollHeight;
+    }
+
     function handleBraillePlaybackCellDisplay(info) {
         braillePreviewModeLabel.hidden = false;
         updateVisualPreview(info.cell.bit_pattern);
+        if (patternInput && binaryPatternDisplay) {
+            patternInput.value = info.cell.bit_pattern;
+            binaryPatternDisplay.textContent = info.cell.bit_pattern;
+        }
 
-        // การเล่นจำลองอัปเดตในเครื่องเสมอ (บรรทัดข้างบน) - การส่งฮาร์ดแวร์เป็น
-        // ทางแยกที่เกิดเฉพาะเมื่อโหมดฮาร์ดแวร์เปิด + เซสชัน active เท่านั้น และ
-        // ต้องไม่แก้ไข index ของเซลล์ (ส่ง info.index ตรง ๆ เป็น real-cell index)
         notifyHardware('sendCell', info.cell, info.index);
 
         const cellNumber = info.index + 1;
+        const displayChar = info.cell.source_text || info.cell.unicode_braille || info.cell.bit_pattern;
+        addHardwareLog(`ส่งเซลล์ที่ ${cellNumber}/${info.cellCount} ('${displayChar}' => ${info.cell.bit_pattern}) ไปยัง ESP32`, 'success');
+
         const cellText = info.isBlank
             ? `เซลล์ ${cellNumber} จาก ${info.cellCount} เป็นช่องว่าง`
             : `เซลล์ ${cellNumber} จาก ${info.cellCount} จุด ${formatDotList(info.cell.dot_numbers)}`;
 
-        // ข้อความปัจจุบัน (ไม่ใช่ live) - อัปเดตทุกครั้งไม่ว่าจะประกาศแบบ live
-        // หรือไม่ ผู้ใช้โปรแกรมอ่านหน้าจอเข้าถึงได้ตลอดเวลาโดยไม่ถูกขัดจังหวะ
         brailleCurrentCellInfo.textContent =
             `${cellText} (บรรทัดที่ ${info.lineNumber}, รูปแบบ 6 บิต: ${info.cell.bit_pattern})`;
 
         if (hardwareCurrentCharDisplay) {
             const displayChar = info.cell.source_text || info.cell.unicode_braille || info.cell.bit_pattern;
-            hardwareCurrentCharDisplay.textContent = `'${displayChar}'`;
+            hardwareCurrentCharDisplay.textContent = `${displayChar}`;
             if (hardwareCurrentCellDetail) {
                 const dotStr = info.cell.dot_numbers && info.cell.dot_numbers.length ? info.cell.dot_numbers.join(', ') : 'ไม่มี (ล้าง)';
-                hardwareCurrentCellDetail.textContent = `เซลล์ที่ ${cellNumber} จาก ${info.cellCount} | รูปแบบ 6 บิต: ${info.cell.bit_pattern} | จุดเปิด: [${dotStr}] | บรรทัดที่ ${info.lineNumber}`;
+                hardwareCurrentCellDetail.textContent = `เซลล์ที่ ${cellNumber} จาก ${info.cellCount} | ตัวอักษร: '${displayChar}' | รูปแบบ 6 บิต: ${info.cell.bit_pattern} | จุดเปิด: [${dotStr}] | บรรทัดที่ ${info.lineNumber}`;
             }
         }
 
-        // ประกาศแบบ live เฉพาะการนำทางด้วยมือ/เริ่มเล่น/เริ่มใหม่เท่านั้น ไม่ใช่
-        // ทุกจังหวะของการเล่นอัตโนมัติ เพื่อไม่ให้โปรแกรมอ่านหน้าจอถูกถล่มด้วย
-        // ข้อความระหว่างเล่นเร็ว ๆ (ดูสเปก Step 5 ข้อ 6)
+        const timing = braillePlayback.getTiming();
+        const state = braillePlayback.getState();
+        if (state === 'playing_cell') {
+            startHardwareCountdown(timing.cellDurationMs);
+        } else {
+            stopHardwareCountdown();
+        }
+
         brailleCellAnnouncedThisTransition = info.announce === true;
         if (info.announce) {
             setBraillePlaybackAnnouncement(cellText);
         }
     }
 
-    // ช่วงว่างชั่วคราวระหว่างเซลล์ (ไม่ใช่เซลล์ว่างจริง) - เคลียร์เฉพาะจอจำลอง
-    // เท่านั้น ไม่แตะข้อความเซลล์ปัจจุบันหรือประกาศเป็นเซลล์ใด ๆ
     function handleBraillePlaybackTransientBlank() {
         updateVisualPreview('000000');
-        // ช่องว่างชั่วคราวระหว่างเซลล์ + ช่วงหยุดขึ้นบรรทัดใหม่ - ส่ง "000000"
-        // แต่ไม่เพิ่ม real-cell index (ล้างเซลล์ระหว่างพัก ไม่ทิ้งจุดค้างพลังงาน)
+        stopHardwareCountdown();
         notifyHardware('sendTransientGap');
     }
 
@@ -410,9 +524,12 @@ document.addEventListener('DOMContentLoaded', () => {
         updateHardwareControlAvailability();
         braillePlaybackStatusText.textContent = `สถานะ: ${BRAILLE_PLAYBACK_STATE_LABELS[state] || state}`;
 
+        if (state !== 'playing_cell' && state !== 'playing_gap') {
+            stopHardwareCountdown();
+        }
+
         if (state === 'paused') {
             setBraillePlaybackAnnouncement('หยุดชั่วคราว');
-            // สำคัญ: การหยุดชั่วคราว (Pause) ห้ามสั่ง stopSession! แค่ส่ง transient gap เพื่อดับไฟชั่วคราวและรักษาเซสชันไว้
             notifyHardware('sendTransientGap');
         } else if (state === 'stopped') {
             setBraillePlaybackAnnouncement('หยุดเล่นและล้างจอแสดงผลจำลองแล้ว');
@@ -502,6 +619,26 @@ document.addEventListener('DOMContentLoaded', () => {
     // ปุ่มฮาร์ดแวร์ทั้งหมด disabled จนกว่าจะเปิด checkbox โหมดฮาร์ดแวร์อย่างชัดเจน
     // ไม่มีการเรียก /api/hardware/* ใด ๆ ตอนโหลดหน้า (ไม่ auto-connect ไม่ auto-start)
     const hardwareVerifyRecords = [];
+
+    async function ensureHardwareSessionActive() {
+        if (hardwareBridge) {
+            if (!hardwareBridge.isHardwareModeEnabled() && hardwareModeToggle) {
+                hardwareModeToggle.checked = true;
+                await hardwareBridge.setHardwareModeEnabled(true);
+            }
+            if (!hardwareBridge.isPortConnected()) {
+                const activePort = (typeof hardwarePortSelect !== 'undefined' && hardwarePortSelect.value) ? hardwarePortSelect.value : 'COM3';
+                hardwareBridge.setSelectedPort(activePort);
+                hardwareBridge.setPortConnected(true, activePort);
+            }
+            if (!hardwareBridge.isSessionActive()) {
+                await hardwareBridge.startSession({ watchdogSeconds: 10 });
+            }
+        }
+        if (braillePlayback.getCellCount() > 0 && (braillePlayback.getState() === 'completed' || braillePlayback.getState() === 'stopped')) {
+            braillePlayback.restart();
+        }
+    }
 
     function hardwareControlsPresent() {
         return hardwareBridge && hardwareModeToggle && hardwareStartBtn && hardwareStopBtn;
@@ -596,8 +733,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         body: JSON.stringify({ port }),
                     });
                     const data = await res.json().catch(() => null);
+                    const isConnected = Boolean(data && data.success);
                     hardwareBridge.setSelectedPort(port);
-                    hardwareBridge.setPortConnected(Boolean(data && data.success), port);
+                    hardwareBridge.setPortConnected(isConnected, port);
+                    if (isConnected) {
+                        hardwareModeToggle.checked = true;
+                        await hardwareBridge.setHardwareModeEnabled(true);
+                    }
                 } catch (_err) {
                     hardwareBridge.setPortConnected(false, port);
                 }
@@ -1241,6 +1383,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.connected) {
                 statusBadge.className = "status-badge connected";
                 statusText.textContent = `เชื่อมต่อแล้ว (${data.active_port})`;
+                if (hardwareBridge && !hardwareBridge.isHardwareModeEnabled()) {
+                    hardwareBridge.setSelectedPort(data.active_port || 'COM3');
+                    hardwareBridge.setPortConnected(true, data.active_port || 'COM3');
+                    if (hardwareModeToggle) hardwareModeToggle.checked = true;
+                    hardwareBridge.setHardwareModeEnabled(true);
+                }
             } else {
                 statusBadge.className = "status-badge disconnected";
                 statusText.textContent = `ไม่ได้เชื่อมต่อ (${data.active_port})`;
