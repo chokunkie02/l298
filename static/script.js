@@ -412,8 +412,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (state === 'paused') {
             setBraillePlaybackAnnouncement('หยุดชั่วคราว');
-            // สำคัญ: การหยุดชั่วคราว (Pause) ห้ามสั่ง stopSession! แค่ส่ง transient gap เพื่อดับไฟชั่วคราวและรักษาเซสชันไว้
-            notifyHardware('sendTransientGap');
+            // ไม่แตะฮาร์ดแวร์จากการเปลี่ยนสถานะ 'paused' ที่นี่ - การเปลี่ยนไป
+            // paused เกิดได้จากทั้ง Pause, ฟังอีกครั้ง และ Next/Previous ตัวเรียก
+            // แต่ละจุดเป็นผู้กำหนดพฤติกรรมฮาร์ดแวร์เองอย่างชัดเจน:
+            //   - ปุ่ม Pause / ฟังอีกครั้ง -> handlePlaybackEnded (จบ+ล้างเซสชัน)
+            //   - Next/Previous -> ส่งเฉพาะเซลล์ปลายทางผ่านคิว (ไม่มี gap ชนกัน)
         } else if (state === 'stopped') {
             setBraillePlaybackAnnouncement('หยุดเล่นและล้างจอแสดงผลจำลองแล้ว');
             braillePreviewModeLabel.hidden = true;
@@ -458,24 +461,37 @@ document.addEventListener('DOMContentLoaded', () => {
         braillePlaybackAnnouncer.textContent = '';
     }
 
-    braillePlayBtn.addEventListener('click', async () => {
-        await ensureHardwareSessionActive();
+    // ปุ่มควบคุมการเล่นหลัก = ควบคุมการจำลองล้วน ๆ ต้องทำงานได้เสมอไม่ว่าจะมี
+    // ฮาร์ดแวร์หรือไม่ **ไม่มีจุดใด** เริ่มเซสชันฮาร์ดแวร์อัตโนมัติ - เซสชัน
+    // ฮาร์ดแวร์เริ่มได้เฉพาะผ่านปุ่ม "เริ่มเซสชันฮาร์ดแวร์" ในการ์ดโหมดฮาร์ดแวร์
+    // หลังผู้ใช้ opt-in เท่านั้น เมื่อเซสชันเปิดอยู่ callback จะส่งเซลล์ให้เอง
+    braillePlayBtn.addEventListener('click', () => {
+        // ก่อนเริ่มเล่นอัตโนมัติต้องหยุดเสียงพูดที่กำลังทำงานอยู่เสมอ (สเปก Step 5
+        // ข้อ 10) เพื่อไม่ให้เสียงพูดกับการเล่นเบรลล์ทับซ้อนกัน
         stopSpeech();
         applyBrailleTimingFromInputs();
         braillePlayback.play();
     });
-    braillePauseBtn.addEventListener('click', () => braillePlayback.pause());
-    braillePreviousBtn.addEventListener('click', async () => {
-        await ensureHardwareSessionActive();
+    braillePauseBtn.addEventListener('click', () => {
+        braillePlayback.pause();
+        // นโยบาย Pause (สอดคล้องทุกที่ ดู README/PROTOCOL.md): การกด Pause จบและ
+        // ล้างเซสชันฮาร์ดแวร์เสมอ ผู้ใช้ต้องเริ่มเซสชันใหม่เองหากต้องการเล่นต่อ
+        notifyHardware('handlePlaybackEnded', 'ผู้ใช้กดหยุดชั่วคราว');
+    });
+    braillePreviousBtn.addEventListener('click', () => {
         applyBrailleTimingFromInputs();
         braillePlayback.previous();
     });
-    brailleNextBtn.addEventListener('click', async () => {
-        await ensureHardwareSessionActive();
+    brailleNextBtn.addEventListener('click', () => {
         applyBrailleTimingFromInputs();
         braillePlayback.next();
     });
-    brailleRestartBtn.addEventListener('click', () => braillePlayback.restart());
+    brailleRestartBtn.addEventListener('click', () => {
+        // การเริ่มเล่นใหม่จากต้นลำดับ = ต้องเริ่มเซสชันฮาร์ดแวร์ใหม่เองอย่างชัดเจน
+        // (ไม่ส่ง index ย้อนหลังเข้าเซสชันเดิมซึ่งจะได้ 409 stale_session)
+        notifyHardware('handlePlaybackEnded', 'เริ่มเล่นใหม่จากต้นลำดับ');
+        braillePlayback.restart();
+    });
     brailleStopBtn.addEventListener('click', () => braillePlayback.stop());
 
     // ปรับค่าเวลาแบบ 'change' (ไม่ใช่ 'input') เพื่อไม่ตรวจสอบ/clamp ทุกครั้งที่
@@ -620,49 +636,41 @@ document.addEventListener('DOMContentLoaded', () => {
             updateHardwareControlAvailability();
         });
 
-    async function ensureHardwareSessionActive() {
-        if (hardwareBridge && hardwareBridge.isHardwareModeEnabled() && hardwareBridge.isPortConnected() && !hardwareBridge.isSessionActive()) {
-            await hardwareBridge.startSession({ watchdogSeconds: 10 });
-            if (braillePlayback.getCellCount() > 0 && (braillePlayback.getState() === 'completed' || braillePlayback.getState() === 'stopped')) {
-                braillePlayback.restart();
-            }
+        // ปุ่มเล่นในการ์ดฮาร์ดแวร์ = ทางลัดสั่งตัวควบคุมการจำลองตัวเดียวกัน
+        // **ไม่เริ่มเซสชันฮาร์ดแวร์อัตโนมัติ** ผู้ใช้ต้องกด "เริ่มเซสชัน
+        // ฮาร์ดแวร์" เองก่อนเสมอ เมื่อเซสชันเปิดอยู่ callback จะส่งเซลล์ให้เอง
+        if (hardwarePlayBtn) {
+            hardwarePlayBtn.addEventListener('click', () => {
+                stopSpeech();
+                applyBrailleTimingFromInputs();
+                braillePlayback.play();
+                updateHardwareControlAvailability();
+            });
         }
-    }
 
-    if (hardwarePlayBtn) {
-        hardwarePlayBtn.addEventListener('click', async () => {
-            await ensureHardwareSessionActive();
-            stopSpeech();
-            applyBrailleTimingFromInputs();
-            braillePlayback.play();
-            updateHardwareControlAvailability();
-        });
-    }
+        if (hardwarePauseBtn) {
+            hardwarePauseBtn.addEventListener('click', () => {
+                braillePlayback.pause();
+                notifyHardware('handlePlaybackEnded', 'ผู้ใช้กดหยุดชั่วคราว');
+                updateHardwareControlAvailability();
+            });
+        }
 
-    if (hardwarePauseBtn) {
-        hardwarePauseBtn.addEventListener('click', () => {
-            braillePlayback.pause();
-            updateHardwareControlAvailability();
-        });
-    }
+        if (hardwarePrevBtn) {
+            hardwarePrevBtn.addEventListener('click', () => {
+                applyBrailleTimingFromInputs();
+                braillePlayback.previous();
+                updateHardwareControlAvailability();
+            });
+        }
 
-    if (hardwarePrevBtn) {
-        hardwarePrevBtn.addEventListener('click', async () => {
-            await ensureHardwareSessionActive();
-            applyBrailleTimingFromInputs();
-            braillePlayback.previous();
-            updateHardwareControlAvailability();
-        });
-    }
-
-    if (hardwareNextBtn) {
-        hardwareNextBtn.addEventListener('click', async () => {
-            await ensureHardwareSessionActive();
-            applyBrailleTimingFromInputs();
-            braillePlayback.next();
-            updateHardwareControlAvailability();
-        });
-    }
+        if (hardwareNextBtn) {
+            hardwareNextBtn.addEventListener('click', () => {
+                applyBrailleTimingFromInputs();
+                braillePlayback.next();
+                updateHardwareControlAvailability();
+            });
+        }
 
         if (hardwareVerifyActivateBtn) {
             hardwareVerifyActivateBtn.addEventListener('click', () => {
@@ -919,11 +927,13 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // นโยบายที่เลือกใช้ (Step 5 ข้อ 10): ถ้าผู้ใช้กด "ฟังข้อความอีกครั้ง"
-        // ระหว่างกำลังเล่นเบรลล์อยู่ ให้หยุดการเล่นเบรลล์ชั่วคราวก่อนเสมอ (ไม่ใช่
-        // หยุดเสียงพูด) เพื่อไม่ให้ทั้งสองอย่างแข่งกันดึงความสนใจของผู้ใช้พร้อมกัน
-        // ตำแหน่งการเล่นเบรลล์ยังคงอยู่ ผู้ใช้กดเล่นต่อได้เองหลังฟังจบ
+        // นโยบายที่เลือกใช้ (Step 5 ข้อ 10 + Step 6): ถ้าผู้ใช้กด "ฟังข้อความ
+        // อีกครั้ง" ระหว่างกำลังเล่นเบรลล์อยู่ ให้หยุดการเล่นเบรลล์ชั่วคราวก่อน
+        // เสมอ ตำแหน่งการเล่นจำลองยังคงอยู่ ผู้ใช้กดเล่นต่อได้เองหลังฟังจบ
+        // สำหรับฮาร์ดแวร์: จบและล้างเซสชันเสมอ (เหมือน Pause) - ไม่ทิ้งเซลล์ค้าง
+        // พลังงานระหว่างฟังเสียง ผู้ใช้เริ่มเซสชันฮาร์ดแวร์ใหม่เองได้
         braillePlayback.pause();
+        notifyHardware('handlePlaybackEnded', 'ฟังข้อความอีกครั้ง');
 
         stopSpeech();
         if (window.speechSynthesis.paused) {

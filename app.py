@@ -93,18 +93,24 @@ def _hardware_flag(name):
 
 
 def _hardware_real_mode_enabled():
-    """โหมดฮาร์ดแวร์จริงเปิดใช้งานเมื่อไม่ได้ถูกสั่งปิดอย่างชัดเจน (BRAILLE_HARDWARE_ENABLED!=0)
+    """โหมดฮาร์ดแวร์จริงเปิดได้เฉพาะเมื่อผู้ควบคุมตั้ง **ทั้งสอง** flag:
 
-    ตรงกับพฤติกรรมของ /send เดิม - ใช้พอร์ต Serial (ser_conn) ที่เปิดอยู่ส่งสัญญาณไปยัง ESP32
+      BRAILLE_HARDWARE_ENABLED=1          - ยอมให้เส้นทางฮาร์ดแวร์ทำงาน
+      BRAILLE_HARDWARE_SAFETY_CONFIRMED=1 - ยืนยันว่าผ่านการทดสอบฮาร์ดแวร์แบบ
+                                           มีผู้ดูแลแล้ว (โปรโตคอล + การล้างเซลล์
+                                           ปลอดภัย ดู README หัวข้อ Step 6)
+
+    ค่าเริ่มต้น = ปิด → ใช้ transport ที่ไม่พร้อมใช้งาน ไม่มีการแตะพอร์ตจริง
+    การที่พอร์ต Serial เปิดอยู่ (ser_conn) **ไม่ได้** แปลว่าปลอดภัยที่จะ actuate
+    ฮาร์ดแวร์ - ต้องยืนยันด้วย flag ที่สองอย่างชัดเจนเสมอ
     """
-    flag = os.environ.get("BRAILLE_HARDWARE_ENABLED", "").strip().lower()
-    if flag in ("0", "false", "no", "off"):
-        return False
-    return True
+    return _hardware_flag("BRAILLE_HARDWARE_ENABLED") and _hardware_flag(
+        "BRAILLE_HARDWARE_SAFETY_CONFIRMED"
+    )
 
 
 def _build_hardware_transport():
-    """เลือก transport ตามสภาพแวดล้อม - ใช้ SerialBrailleHardwareTransport เมื่อเปิดการเชื่อมต่อ"""
+    """เลือก transport ตามสภาพแวดล้อม - เรียกใหม่ได้เมื่อ flag เปลี่ยน (เทสต์)"""
     if os.environ.get("BRAILLE_HARDWARE_MOCK", "").strip().lower() in ("1", "true", "yes", "on"):
         return MockBrailleHardwareTransport(available=True)
     if not _hardware_real_mode_enabled():

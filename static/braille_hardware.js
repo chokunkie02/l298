@@ -15,6 +15,14 @@
  *  - onStop / onComplete / onError -> หยุดเซสชันและล้างเซลล์
  *  - callback ที่ล้าสมัย (เซสชันถูกปิดไปแล้ว) จะถูกทิ้ง ไม่ส่งต่อ
  *
+ * === การจัดคิว (serialization) ===
+ * ทุกคำขอที่เปลี่ยนสถานะฮาร์ดแวร์ (display cell, transient gap, verify) ของ
+ * เซสชันหนึ่ง ถูกจัดคิวและทำ **ทีละคำขอเท่านั้น** ไม่มีทางที่สองคำขอจะออกพร้อม
+ * กันด้วย generation เดียวกัน (ซึ่งจะทำให้คำขอที่สองได้ 409 stale_session)
+ * แต่ละคำขอในคิวใช้ generation ล่าสุดที่ได้จาก response ของคำขอก่อนหน้า
+ * การหยุด (stopSession) มีลำดับความสำคัญสูงสุด: ทำให้เซสชัน client เป็นโมฆะ
+ * ทันที ล้างคิว แล้วส่งคำขอ stop/clear แบบ best-effort โดยไม่รอคิว
+ *
  * "สำเร็จ" มีสี่ระดับ (ดู README): accepted_by_server / written_to_serial /
  * acknowledged_by_device (unknown) / physically_displayed (unknown) - โมดูลนี้
  * ห้ามแปลง written_to_serial เป็นข้อความว่าอุปกรณ์แสดงผลสำเร็จ
@@ -78,9 +86,13 @@
             this._sessionId = null;
             this._generation = null;
             this._sessionActive = false;
-            // เพิ่มทุกครั้งที่เริ่ม/หยุดเซสชัน - ใช้ทิ้ง callback ที่ค้างจากเซสชันเก่า
+            // เพิ่มทุกครั้งที่เริ่ม/หยุดเซสชัน - ใช้ทิ้ง callback/คำขอที่ค้างจาก
+            // เซสชันเก่า (queue item ที่ epoch ไม่ตรงจะถูกทิ้งเป็น stale)
             this._sessionEpoch = 0;
-            this._inFlight = false;
+
+            // คิวคำสั่งที่เปลี่ยนสถานะฮาร์ดแวร์ - ทำทีละคำขอ
+            this._mutationQueue = [];
+            this._queueRunning = false;
         }
 
         // --- สถานะ ---------------------------------------------------------
@@ -89,6 +101,9 @@
         isSessionActive() { return this._sessionActive; }
         getSelectedPort() { return this._selectedPort; }
         isPortConnected() { return this._portConnected; }
+        getGeneration() { return this._generation; }
+        // จำนวนคำขอที่รอในคิว + ที่กำลังทำอยู่ (สำหรับเทสต์/สถานะ)
+        pendingMutationCount() { return this._mutationQueue.length + (this._queueRunning ? 1 : 0); }
 
         setSelectedPort(port) {
             this._selectedPort = port || null;
@@ -147,7 +162,9 @@
             if (!res.ok) {
                 return this._fail(res.code, res.message);
             }
+            // เซสชันใหม่ทำให้คิว/response ของเซสชันเก่าเป็นโมฆะทั้งหมด
             this._sessionEpoch += 1;
+            this._clearQueue();
             this._sessionId = res.data.session_id;
             this._generation = res.data.generation;
             this._sessionActive = true;
@@ -166,18 +183,23 @@
         async stopSession(reason) {
             const wasActive = this._sessionActive;
             const sessionId = this._sessionId;
-            // 1) ยกเลิกฝั่ง client ทันที
+            // 1) ยกเลิกฝั่ง client "ก่อน" ทำงานอื่นเสมอ - stop มีลำดับความสำคัญ
+            //    สูงสุด ต้องไม่ถูกบล็อกอยู่หลังคิวคำขอที่ยาว
             this._sessionEpoch += 1;
             this._sessionActive = false;
             this._sessionId = null;
             this._generation = null;
+            // ทิ้งคำขอที่ค้างในคิวทั้งหมด (คำขอที่กำลังทำอยู่จะกลายเป็น stale เอง
+            // ตอน response กลับมา เพราะ epoch เปลี่ยนแล้ว)
+            this._clearQueue();
             this._onSessionChange({ active: false, sessionId: null });
 
             if (!wasActive) {
                 return { ok: true, wasActive: false };
             }
 
-            // 2) แจ้งเซิร์ฟเวอร์ให้ล้างเซลล์ (best-effort)
+            // 2) แจ้งเซิร์ฟเวอร์ให้ล้างเซลล์ (best-effort, ไม่ผ่านคิว)
+            //    เส้นทาง /stop ฝั่งเซิร์ฟเวอร์เป็น idempotent และไม่ตรวจ generation
             const res = await this._request(BRAILLE_HARDWARE_ENDPOINTS.stop, { session_id: sessionId });
             this._onSendStatus({
                 phase: 'session_stopped',
@@ -208,10 +230,10 @@
             if (typeof realCellIndex !== 'number' || realCellIndex < 0) {
                 return this._fail('invalid_pattern', 'ดัชนีเซลล์จริงไม่ถูกต้อง');
             }
-            return this._sendToEndpoint(BRAILLE_HARDWARE_ENDPOINTS.cell, {
+            return this._enqueueMutation(() => this._sendToEndpoint(BRAILLE_HARDWARE_ENDPOINTS.cell, {
                 bit_pattern: pattern,
                 real_cell_index: realCellIndex,
-            });
+            }));
         }
 
         /**
@@ -220,10 +242,10 @@
          */
         async sendTransientGap() {
             if (!this._canSend()) return { ok: false, skipped: true };
-            return this._sendToEndpoint(BRAILLE_HARDWARE_ENDPOINTS.cell, {
+            return this._enqueueMutation(() => this._sendToEndpoint(BRAILLE_HARDWARE_ENDPOINTS.cell, {
                 transient_gap: true,
                 bit_pattern: CLEAR_PATTERN,
-            });
+            }));
         }
 
         /**
@@ -237,22 +259,11 @@
             if (typeof pattern !== 'string' || !SIX_BIT_RE.test(pattern) || pattern === '111111') {
                 return this._fail('invalid_pattern', 'โหมดตรวจสอบรับเฉพาะรูปแบบจุดเดียวหรือรูปแบบล้าง');
             }
-            const res = await this._request(BRAILLE_HARDWARE_ENDPOINTS.verifyCell, {
-                session_id: this._sessionId,
-                generation: this._generation,
-                bit_pattern: pattern,
-            });
-            if (res.ok) {
-                this._generation = res.data.generation;
-                this._onSendStatus({
-                    phase: 'written',
-                    message: BRAILLE_HARDWARE_UNCONFIRMED_MESSAGE,
-                    detail: `ทดสอบรูปแบบ ${pattern}`,
-                });
-                return { ok: true, data: res.data };
-            }
-            this._onSendStatus({ phase: 'error', message: res.message, detail: res.code });
-            return this._fail(res.code, res.message);
+            return this._enqueueMutation(() => this._sendToEndpoint(
+                BRAILLE_HARDWARE_ENDPOINTS.verifyCell,
+                { bit_pattern: pattern },
+                { detailPrefix: `ทดสอบรูปแบบ ${pattern}` },
+            ));
         }
 
         /** onComplete / onError / onStop ทั้งหมดจบเซสชันแบบเดียวกัน */
@@ -267,7 +278,51 @@
             return this._hardwareModeEnabled && this._sessionActive && this._sessionId !== null;
         }
 
-        async _sendToEndpoint(url, extraBody) {
+        /**
+         * ใส่คำสั่งที่เปลี่ยนสถานะฮาร์ดแวร์เข้าคิว - ทำทีละคำขอตามลำดับ
+         * @param {function} run - () => Promise<result> เรียกตอนถึงคิว (อ่าน
+         *   this._generation สด ณ ตอนนั้น จึงได้ค่าล่าสุดจาก response ก่อนหน้า)
+         */
+        _enqueueMutation(run) {
+            return new Promise((resolve) => {
+                this._mutationQueue.push({ epoch: this._sessionEpoch, run, resolve });
+                this._pumpQueue();
+            });
+        }
+
+        async _pumpQueue() {
+            if (this._queueRunning) return;
+            this._queueRunning = true;
+            try {
+                while (this._mutationQueue.length > 0) {
+                    const item = this._mutationQueue.shift();
+                    // เซสชันถูกหยุด/รีสตาร์ต หรือหมดอายุ ระหว่างรอคิว -> ทิ้ง
+                    if (item.epoch !== this._sessionEpoch || !this._sessionActive) {
+                        item.resolve({ ok: false, stale: true });
+                        continue;
+                    }
+                    let result;
+                    try {
+                        result = await item.run();
+                    } catch (err) {
+                        result = this._fail('write_failed', `คำสั่งฮาร์ดแวร์ล้มเหลว: ${err && err.message}`);
+                    }
+                    item.resolve(result);
+                }
+            } finally {
+                this._queueRunning = false;
+            }
+        }
+
+        /** ทิ้งคำขอที่รอในคิวทั้งหมด (คำขอที่กำลังทำอยู่ปล่อยให้จบเองเป็น stale) */
+        _clearQueue() {
+            const items = this._mutationQueue;
+            this._mutationQueue = [];
+            items.forEach(it => it.resolve({ ok: false, aborted: true }));
+        }
+
+        async _sendToEndpoint(url, extraBody, opts) {
+            const options = opts || {};
             const epoch = this._sessionEpoch;
             const body = Object.assign(
                 { session_id: this._sessionId, generation: this._generation },
@@ -276,15 +331,18 @@
             const res = await this._request(url, body);
 
             // เซสชันถูกหยุด/รีสตาร์ตระหว่างรอ response -> ทิ้งผลนี้ ไม่ส่งต่อ
+            // (late response ห้ามปลุกเซสชันใหม่ให้ทำงานเด็ดขาด)
             if (epoch !== this._sessionEpoch) {
                 return { ok: false, stale: true };
             }
             if (!res.ok) {
-                // เซิร์ฟเวอร์บอกว่าเซสชันหมดอายุ/หมดเวลา -> ปิดฝั่ง client ด้วย
+                // เซิร์ฟเวอร์บอกว่าเซสชันหมดอายุ/หมดเวลา -> ปิดฝั่ง client + ล้างคิว
                 if (['stale_session', 'session_not_active', 'watchdog_expired', 'session_conflict'].includes(res.code)) {
+                    this._sessionEpoch += 1;
                     this._sessionActive = false;
                     this._sessionId = null;
                     this._generation = null;
+                    this._clearQueue();
                     this._onSessionChange({ active: false, sessionId: null });
                     if (res.code === 'watchdog_expired') {
                         this._onWatchdogStatus({
@@ -300,9 +358,11 @@
             this._onSendStatus({
                 phase: 'written',
                 message: BRAILLE_HARDWARE_UNCONFIRMED_MESSAGE,
-                detail: res.data.transient_gap
-                    ? 'ช่องว่างชั่วคราว (ล้างเซลล์)'
-                    : `เซลล์จริงลำดับที่ ${res.data.real_cell_index + 1}`,
+                detail: options.detailPrefix
+                    ? options.detailPrefix
+                    : (res.data.transient_gap
+                        ? 'ช่องว่างชั่วคราว (ล้างเซลล์)'
+                        : `เซลล์จริงลำดับที่ ${(res.data.real_cell_index || 0) + 1}`),
             });
             return { ok: true, data: res.data };
         }
@@ -311,7 +371,6 @@
             if (this._fetch === null) {
                 return { ok: false, code: 'write_failed', message: 'ไม่มี fetch ให้ใช้งาน' };
             }
-            this._inFlight = true;
             try {
                 const response = await this._fetch(url, {
                     method: 'POST',
@@ -329,8 +388,6 @@
                 return { ok: true, data: data };
             } catch (err) {
                 return { ok: false, code: 'write_failed', message: `เชื่อมต่อเซิร์ฟเวอร์ไม่ได้: ${err.message}` };
-            } finally {
-                this._inFlight = false;
             }
         }
 

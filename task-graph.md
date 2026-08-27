@@ -1,5 +1,15 @@
 # Task Graph
 
+> **หมายเหตุ (ปรับปรุงหลังตรวจ commit e45bdd5):** งานใน Phase 1 บางส่วนทำให้เกิด
+> การถดถอยด้านความปลอดภัยและด้านฟังก์ชัน จึงถูก **revert** ไปแล้ว:
+> - **Task 1** (Liblouis → legacy fallback) — ยกเลิก: production ต้องคืน 503 ไม่ fallback เงียบ ๆ
+> - **Task 3** (เปิด Serial transport โดยดีฟอลต์) — ยกเลิก: ต้องมี `BRAILLE_HARDWARE_ENABLED` + `BRAILLE_HARDWARE_SAFETY_CONFIRMED` ครบทั้งสอง
+> - **Task 5** (watchdog 10s + auto-start session) — ยกเลิก: watchdog กลับเป็น 4.0s, ปุ่มเล่นหลักไม่เริ่มเซสชันอัตโนมัติ
+> - **Task 6** (paused → sendTransientGap) — ยกเลิก: ทำให้เกิด 409 stale_session; Pause จบและล้างเซสชัน, คำขอทุกอย่างเข้าคิวทีละรายการ
+>
+> Task 2 (CSS contrast) และปุ่ม/การ์ดใน Task 4 (ที่ไม่เริ่มเซสชันอัตโนมัติ) ยังคงไว้
+> แหล่งอ้างอิงที่ถูกต้อง: `README.md` + `PROTOCOL.md`
+
 ### Phase 1: Fix Braille Translation & Hardware UI Font Color Issues
 - [x] **Task 1**: Fallback Liblouis to Legacy Dictionary when Liblouis is Unavailable
     - *File*: `c:/Users/kt856/Downloads/jumpb/liblouis_translator.py`

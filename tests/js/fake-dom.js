@@ -176,6 +176,13 @@ function createEnv(options = {}) {
     const elements = {};
     ELEMENT_IDS.forEach(id => { elements[id] = new FakeElement(id); });
 
+    // ค่าเริ่มต้นของช่องตั้งเวลาการเล่น - ต้องตรงกับ templates/index.html เพื่อให้
+    // applyBrailleTimingFromInputs() (ถูกเรียกในตัวจัดการปุ่มเล่น) ตั้งค่าเดียว
+    // กับหน้าเว็บจริง ไม่ใช่ 0/ว่าง
+    elements.brailleCellDurationInput.value = '3000';
+    elements.brailleGapInput.value = '150';
+    elements.brailleLinePauseInput.value = '700';
+
     const documentListeners = {};
     const fakeDocument = {
         activeElement: null,
